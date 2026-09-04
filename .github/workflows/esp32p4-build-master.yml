@@ -116,6 +116,20 @@ jobs:
           cp "binaries-esp32p4/M5MonsterC5-Tab5-full-${{ steps.version.outputs.version }}.bin" \
             "binaries-esp32p4/M5MonsterC5-Tab5-full.bin"
 
+      - name: Package for M5StackLauncher
+        id: launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          python3 tools/package_launcher.py \
+            --build-dir binaries-esp32p4 \
+            --out-dir binaries-esp32p4 \
+            --name "M5MonsterC5-Tab5-launcher.bin" \
+            --version "$version"
+          cp binaries-esp32p4/M5MonsterC5-Tab5-launcher.bin \
+            "binaries-esp32p4/M5MonsterC5-Tab5-launcher-${version}.bin"
+
       - name: Package firmware zip
         id: bundle
         run: |
@@ -127,6 +141,9 @@ jobs:
             bootloader.bin \
             partition-table.bin \
             flash_board.py \
+            launcher-manifest.json \
+            M5MonsterC5-Tab5-launcher.bin \
+            "M5MonsterC5-Tab5-launcher-${{ steps.version.outputs.version }}.bin" \
             M5MonsterC5-Tab5-full.bin \
             "M5MonsterC5-Tab5-full-${{ steps.version.outputs.version }}.bin" \
             "M5MonsterC5-Tab5-${{ steps.version.outputs.version }}.bin" \
@@ -172,6 +189,9 @@ jobs:
             "firmware/M5MonsterC5-Tab5-full-${FW_VERSION}.bin"
             firmware/M5MonsterC5-Tab5.bin
             "firmware/M5MonsterC5-Tab5-${FW_VERSION}.bin"
+            firmware/M5MonsterC5-Tab5-launcher.bin
+            "firmware/M5MonsterC5-Tab5-launcher-${FW_VERSION}.bin"
+            firmware/launcher-manifest.json
           )
 
           if [ -f "firmware/M5MonsterC5-Tab5-${FW_VERSION}.zip" ]; then

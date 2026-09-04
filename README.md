@@ -15,6 +15,14 @@ It is intended for M5Stack Tab5 devices, and it can also be used with Android an
 
 Project Zero (JanOS): https://github.com/C5Lab/projectZero
 
+### M5StackLauncher
+
+The Tab5 app can also be installed alongside other firmware with
+[M5StackLauncher](https://github.com/joshuawowk/M5StackLauncher): copy
+`M5MonsterC5-Tab5-launcher.bin` from a release to your SD card and install it from the
+Launcher's SD Card menu. See [docs/LAUNCHER.md](docs/LAUNCHER.md) for packaging, a
+Favorites entry, and compatibility notes.
+
 ---
 
 ## Documentation
