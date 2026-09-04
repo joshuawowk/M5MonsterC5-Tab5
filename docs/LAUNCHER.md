@@ -13,9 +13,11 @@ M5MonsterC5-Tab5 for it.
 | `launcher-manifest.json` | Machine-readable record of the install layout (offsets, sizes, sha256), modelled on LauncherHub's `install` object. Documentation only — not needed for SD or Favorites installs, and LauncherHub submissions go through its own service. |
 | `M5MonsterC5-Tab5-launcher.bin.sha256` | Checksum. |
 
-`M5MonsterC5-Tab5-launcher.bin` is byte-identical in structure to
-`M5MonsterC5-Tab5-full.bin` — it is renamed and validated so it is unambiguous which
-asset the Launcher wants. Both are also valid for a direct esptool flash at `0x0`.
+`M5MonsterC5-Tab5-launcher.bin` is byte-identical to `M5MonsterC5-Tab5-full.bin` from the
+same build — same merge, same inputs. It exists under its own name so the SD-card asset is
+unambiguous in a release listing, and so the Favorites link below can point at a stable
+`releases/latest/download/` URL. Either file works, and both are equally valid for a
+direct esptool flash at `0x0`.
 
 Do **not** hand the Launcher `M5MonsterC5-Tab5.bin` (the bare app). Without a partition
 table at `0x8000` the Launcher falls back to treating the whole file as a raw app image
@@ -63,8 +65,12 @@ on every release build.
 ]
 ```
 
-Leave `fid` blank for a direct link. The Launcher downloads it to the SD card and
-installs it through the same path as above.
+Leave `fid` blank for a direct link. This is a **different code path** from the SD-card
+install: `installExtFirmware()` fetches bytes `0x8000`–`0xFFFF` with an HTTP Range request,
+reads the partition table straight out of that response, and streams the install — it does
+not stage the file on the SD card first. The host must therefore answer Range requests
+with `206 Partial Content`; GitHub release downloads do, but a self-hosted server may need
+configuring.
 
 This firmware does not chain back to the Launcher on its own; see the Launcher's own
 documentation for how to return to it on the Tab5.
@@ -115,19 +121,36 @@ directly at `0x0` with esptool).
 
 The two builds differ in bootloader-time configuration:
 
-| Setting | This project (`sdkconfig.defaults`) | Launcher (`boards/m5stack-tab5`) |
+| Setting | This project | Launcher |
 | --- | --- | --- |
-| Board / chip variant | ESP32-P4, IDF 5.4.1 | `esp32p4_es` (pre rev.300) |
-| Flash mode | `QIO` | `qio` |
-| PSRAM | `SPIRAM_SPEED_200M`, `SPIRAM_XIP_FROM_PSRAM` | `BOARD_HAS_PSRAM`, 200 MHz oct |
-| L2 cache | `CACHE_L2_CACHE_256KB`, `LINE_128B` | not declared in board config |
+| Board definition | ESP32-P4, IDF 5.4.1, Tab5 BSP | `board = esp32p4_es` → `boards/_jsonfiles/esp32p4_es.json`, "Espressif ESP32-P4 (**generic**, ES pre rev.300)" |
+| Flash mode in image header | `DIO` @ 80 MHz, 16 MB | board JSON declares `qio` |
+| PSRAM | `SPIRAM_MODE_HEX`, `SPIRAM_SPEED_200M`, `SPIRAM_XIP_FROM_PSRAM` | `psram_mode: oct`, `f_psram: 200 MHz` |
+| L2 cache | `CACHE_L2_CACHE_256KB`, `LINE_128B` | not declared |
 
-Flash mode and PSRAM speed line up. The L2 cache size/line settings are configured by the
-bootloader on the P4 and are not visible in the Launcher's board definition, so a
-first install should be confirmed on hardware. If the app hangs immediately after the
-Launcher reboots into it, that is the first thing to check — flashing
-`M5MonsterC5-Tab5-launcher.bin` directly at `0x0` (which uses this project's own
-bootloader) isolates it.
+Note the board row: the Launcher's Tab5 environment builds against a **generic** P4 board
+definition (the Tab5-specific JSON was folded into it upstream), with Tab5 specifics
+supplied as `-D` flags in `boards/m5stack-tab5/platformio.ini`. So the PSRAM and flash
+values below are that generic file's defaults, not Tab5-verified choices.
+
+Read the flash-mode row carefully: `sdkconfig` selects `CONFIG_ESPTOOLPY_FLASHMODE_QIO`,
+but `CONFIG_ESPTOOLPY_FLASHMODE` resolves to `"dio"` and both the bootloader and app
+headers in the shipped image are stamped **DIO** — QIO is negotiated by the bootloader at
+runtime. That is normal for IDF on the P4 and is *not* itself a mismatch; it just means
+the header value is not the thing to compare against the Launcher's `qio`.
+
+The rows that could matter are PSRAM mode — this project builds `HEX`/16-line, the generic
+board file says `oct` — and L2 cache, which is bootloader-configured on the P4 and not
+declared at all. Neither is strong evidence of a real mismatch, precisely because they are
+generic defaults rather than deliberate Tab5 settings. Whether either bites depends on how
+much of that setup the Arduino bootloader defers to the app, which cannot be settled by
+reading configs.
+
+**So: confirm the first install on hardware.** If the app hangs immediately after the
+Launcher reboots into it, this is the first thing to check. Flashing
+`M5MonsterC5-Tab5-launcher.bin` directly at `0x0` with esptool uses this project's own
+bootloader and isolates the question — if it boots that way but not via the Launcher, the
+bootloader is the cause.
 
 ## The C6 co-processor is separate
 

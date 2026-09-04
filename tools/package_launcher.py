@@ -16,7 +16,19 @@ parsing that ``updateFromSD()`` in the Launcher performs, so CI fails loudly
 instead of shipping a binary the Launcher silently rejects.
 
 Reference: https://github.com/joshuawowk/M5StackLauncher
-           src/sd_functions.cpp :: updateFromSD / installFromSdDynamic
+           src/sd_functions.cpp        :: updateFromSD, measureSdEspImage,
+                                          sdPartitionIsEmpty, boundedSdPartitionPayload
+           src/partition_table_model.* :: launcherPartitionInitDefaultSizes,
+                                          launcherPartitionBoundedPayloadSize
+           include/pre_compiler.h      :: LAUNCHER_DEFAULT_SPIFFS_THRESHOLD
+
+Fidelity: the sizing constants are board- and runtime-dependent (see the block below)
+and are hardcoded here for the Tab5's 16 MB flash -- re-check them against the Launcher
+source if this is ever reused for another board. Two deliberate divergences: an app
+entry that computes to size 0 makes this tool fail, where the Launcher would go on to
+consider later app entries; and a table whose first entry is not 0xAA50 ends the scan
+here rather than continuing. Both are stricter than the Launcher, which is the right
+bias for a packaging gate.
 
 Usage:
     tools/package_launcher.py                      # merge from binaries-esp32p4/
@@ -39,7 +51,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # --- ESP32-P4 flash layout -------------------------------------------------
 BOOTLOADER_OFFSET = 0x2000
 PARTITION_TABLE_OFFSET = 0x8000
-PARTITION_TABLE_SIZE = 0xC00
+PARTITION_TABLE_SIZE = 0x1000  # LAUNCHER_PARTITION_TABLE_SIZE (partition_table_model.h)
 PARTITION_ENTRY_SIZE = 32
 DEFAULT_APP_OFFSET = 0x10000
 FLASH_SIZE = 16 * 1024 * 1024
@@ -170,10 +182,28 @@ def measure_esp_image(data: bytes, offset: int) -> int | None:
 
 
 def partition_is_empty(data: bytes, offset: int) -> bool:
-    """Launcher sdPartitionIsEmpty(): no payload in the file at that offset."""
-    if offset >= len(data):
+    """Launcher sdPartitionIsEmpty() (sd_functions.cpp).
+
+    Only the first 16 bytes are inspected, and they must be *uniformly* 0xFF or
+    *uniformly* 0x00 -- a mix of the two counts as carrying payload.
+    """
+    if offset == 0 or len(data) <= offset:
         return True
-    return all(b in (0xFF, 0x00) for b in data[offset:offset + 0x1000])
+    window = data[offset:offset + 16]
+    return all(b == 0xFF for b in window) or all(b == 0x00 for b in window)
+
+
+def bounded_payload_size(data: bytes, offset: int, declared: int, max_size: int) -> int:
+    """Launcher boundedSdPartitionPayload() + launcherPartitionBoundedPayloadSize()."""
+    if offset == 0 or len(data) <= offset or declared == 0:
+        return 0
+    available = len(data) - offset
+    copy_size = declared
+    if max_size > 0 and copy_size > max_size:
+        copy_size = max_size
+    if copy_size > available:
+        copy_size = available
+    return copy_size
 
 
 def parse_partition_table(data: bytes) -> list[dict]:
@@ -215,7 +245,9 @@ def plan_install(data: bytes) -> dict:
         if e["type"] == 0x00 and e["subtype"] in APP_SUBTYPES and app is None:
             declared = e["size"]
             offset = e["offset"]
-            if len(data) < declared + offset:
+            # The Launcher compares uint32_t values here; wrap so an absurd
+            # declared size predicts the same branch it would take.
+            if len(data) < ((declared + offset) & 0xFFFFFFFF):
                 # Launcher tail-size fallback: the declared partition is bigger
                 # than the file, so everything after the app offset is the app.
                 size = len(data) - offset
@@ -238,11 +270,15 @@ def plan_install(data: bytes) -> dict:
                 create = None  # LAUNCHER_INSTALL_USE_REMAINING_SPIFFS_SIZE
             else:
                 create = LAUNCHER_DEFAULT_SPIFFS_SIZE
+            # The Launcher caps the copy at the partition it will create, except
+            # when it sizes the partition as "use the remaining flash" (create is
+            # None here), where the declared size is the cap instead.
+            copy = 0 if empty else bounded_payload_size(
+                data, e["offset"], declared, declared if create is None else create
+            )
             data_parts.append(
                 {"label": label, "kind": SUBTYPE_NAMES.get(e["subtype"], "?"),
-                 "declared": declared, "create": create,
-                 "copy": 0 if empty else min(declared, create or declared),
-                 "empty": empty}
+                 "declared": declared, "create": create, "copy": copy, "empty": empty}
             )
         elif e["type"] == 0x01 and e["subtype"] == 0x81:
             data_parts.append(
