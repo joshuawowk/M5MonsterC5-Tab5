@@ -1891,6 +1891,10 @@ static bool g_wd_autoupload_poweroff = false;  // power off the Tab5 after a suc
 static lv_obj_t *nmap_page = NULL;
 static lv_obj_t *nmap_password_input = NULL;
 static lv_obj_t *nmap_keyboard = NULL;
+/* When the A164 physical keyboard is connected, a focused text field types via
+ * the A164 with the on-screen keyboard hidden. This tracks that field so the
+ * A164 nav timer stays in text-entry mode instead of evicting it from the group. */
+static lv_obj_t *s_a164_ta = NULL;
 static lv_obj_t *nmap_connect_btn = NULL;
 static lv_obj_t *nmap_status_label = NULL;
 static lv_obj_t *nmap_hosts_container = NULL;
@@ -9158,8 +9162,23 @@ static bool handshaker_handle_pcap_line(const char *line)
                 mkdir("/sdcard/lab", 0777);
                 mkdir("/sdcard/lab/handshakes", 0777);
             }
-            char path[168];
+            char path[220];
             snprintf(path, sizeof(path), "/sdcard/lab/handshakes/%s", g_pcap_rx_name);
+            /* Never overwrite an existing capture: if the name collides (e.g. the
+             * C5 reused a filename), insert _1, _2, ... before the extension until
+             * a free path is found. */
+            struct stat pst;
+            if (stat(path, &pst) == 0) {
+                char stem[168];
+                snprintf(stem, sizeof(stem), "%s", g_pcap_rx_name);
+                char suffix[12] = "";
+                char *ext = strrchr(stem, '.');
+                if (ext) { snprintf(suffix, sizeof(suffix), "%s", ext); *ext = '\0'; }
+                for (int n = 1; n < 1000; n++) {
+                    snprintf(path, sizeof(path), "/sdcard/lab/handshakes/%s_%d%s", stem, n, suffix);
+                    if (stat(path, &pst) != 0) break;
+                }
+            }
             FILE *f = fopen(path, "wb");
             if (f) {
                 fwrite(g_pcap_rx_buf, 1, g_pcap_rx_len, f);
@@ -10175,11 +10194,26 @@ static void nmap_keyboard_cb(lv_event_t *e)
     }
 }
 
+// A164 typing on the nmap password field ends on Enter (READY) or Esc (CANCEL):
+// release the field from the A164 group so arrow keys navigate the page again.
+static void nmap_a164_exit_cb(lv_event_t *e)
+{
+    (void)e;
+    s_a164_ta = NULL;
+    a164_kbd_route_to(NULL);
+}
+
 static void nmap_password_input_cb(lv_event_t *e)
 {
     (void)e;
     if (nmap_keyboard) {
-        lv_obj_clear_flag(nmap_keyboard, LV_OBJ_FLAG_HIDDEN);
+        if (a164_kbd_present()) {
+            // Physical A164 connected: type on it, keep the touch keyboard hidden.
+            lv_obj_add_flag(nmap_keyboard, LV_OBJ_FLAG_HIDDEN);
+            s_a164_ta = nmap_password_input;
+        } else {
+            lv_obj_clear_flag(nmap_keyboard, LV_OBJ_FLAG_HIDDEN);
+        }
         app_kb_bind(nmap_keyboard, nmap_password_input);
     }
 }
@@ -10188,6 +10222,12 @@ static void nmap_back_cb(lv_event_t *e)
 {
     (void)e;
     ESP_LOGI(TAG, "Nmap: back button pressed");
+
+    // Release the A164 group if the password field held it, so nav resumes.
+    if (s_a164_ta == nmap_password_input) {
+        s_a164_ta = NULL;
+        a164_kbd_route_to(NULL);
+    }
 
     if (nmap_scanning) {
         nmap_scanning = false;
@@ -11231,6 +11271,8 @@ static void show_nmap_page(void)
         lv_obj_set_style_border_width(nmap_password_input, 1, 0);
         lv_obj_set_style_text_color(nmap_password_input, lv_color_hex(0xFFFFFF), 0);
         lv_obj_add_event_cb(nmap_password_input, nmap_password_input_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(nmap_password_input, nmap_a164_exit_cb, LV_EVENT_READY, NULL);
+        lv_obj_add_event_cb(nmap_password_input, nmap_a164_exit_cb, LV_EVENT_CANCEL, NULL);
 
         lv_obj_t *btn_row = lv_obj_create(pass_section);
         lv_obj_set_size(btn_row, lv_pct(100), LV_SIZE_CONTENT);
@@ -11338,6 +11380,8 @@ static void show_nmap_page(void)
         lv_obj_set_style_border_width(nmap_password_input, 1, 0);
         lv_obj_set_style_text_color(nmap_password_input, lv_color_hex(0xFFFFFF), 0);
         lv_obj_add_event_cb(nmap_password_input, nmap_password_input_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(nmap_password_input, nmap_a164_exit_cb, LV_EVENT_READY, NULL);
+        lv_obj_add_event_cb(nmap_password_input, nmap_a164_exit_cb, LV_EVENT_CANCEL, NULL);
 
         nmap_connect_btn = lv_btn_create(pass_section);
         lv_obj_set_size(nmap_connect_btn, 120, 40);
@@ -16980,6 +17024,15 @@ static void global_handshaker_monitor_task(void *arg)
                     if (line_pos > 0) {
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "Global Handshaker UART: %s", line_buffer);
+
+                        // A streamed PCAP (board has no SD) is reassembled + saved
+                        // here too. Without this, the global "attack all" sweep
+                        // captured handshakes but NEVER wrote them -- the frame
+                        // lines fell through to the text parsers and were dropped.
+                        if (handshaker_handle_pcap_line(line_buffer)) {
+                            line_pos = 0;
+                            continue;
+                        }
 
                         // Determine message type and log it
                         hs_log_type_t log_type = HS_LOG_PROGRESS;
@@ -37730,9 +37783,14 @@ static void a164_nav_timer_cb(lv_timer_t *t)
     lv_group_t *g = a164_kbd_group();
     if (!g) return;
 
-    // Text-entry mode while a bound on-screen keyboard is visible.
+    // Text-entry mode while a bound on-screen keyboard is visible, OR (A164
+    // present) while a routed field is focused with the OSK hidden -- so hiding
+    // the touch keyboard doesn't drop us out of typing and evict the field.
+    lv_obj_t *foc = lv_group_get_focused(g);
     bool typing = (s_a164_osk && lv_obj_is_valid(s_a164_osk) &&
-                   !lv_obj_has_flag(s_a164_osk, LV_OBJ_FLAG_HIDDEN));
+                   !lv_obj_has_flag(s_a164_osk, LV_OBJ_FLAG_HIDDEN))
+                  || (s_a164_ta && lv_obj_is_valid(s_a164_ta) && foc == s_a164_ta &&
+                      lv_obj_check_type(foc, &lv_textarea_class));
     a164_kbd_set_nav_mode(!typing);
     if (typing) {
         s_a164_nav_page = NULL; // force a repopulate once typing ends
