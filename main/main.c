@@ -9205,6 +9205,26 @@ static bool tab5_recv_file_stream_line(const char *line)
         }
         return true;
     }
+    if (strncmp(line, "[FILEA name=", 12) == 0) {
+        /* Append frame: [FILEA name=<relpath>]<base64> -> append to /sdcard/<relpath> */
+        const char *n = line + 12;
+        const char *close = strchr(n, ']');
+        if (!close) return true;
+        char rel[128];
+        size_t nl = (size_t)(close - n);
+        if (nl >= sizeof(rel)) nl = sizeof(rel) - 1;
+        memcpy(rel, n, nl); rel[nl] = '\0';
+        uint8_t dec[64];
+        int dn = pcap_b64_decode_line(close + 1, dec, sizeof(dec));
+        if (dn <= 0) return true;
+        char path[220];
+        snprintf(path, sizeof(path), "/sdcard/%s", rel);
+        tab5_mkdir_parents(path);
+        FILE *f = fopen(path, "a");
+        if (f) { fwrite(dec, 1, (size_t)dn, f); fclose(f); }
+        else { ESP_LOGW(TAG, "[FILE-RX] append open failed: %s", path); }
+        return true;
+    }
     return false;
 }
 
@@ -12548,6 +12568,11 @@ static void karma_monitor_task(void *arg)
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "Karma UART: %s", line_buffer);
 
+                        // A streamed file (the C5 has no SD) is reassembled and written to
+                        // our /sdcard; its frame lines are not normal messages. Karma mode
+                        // reroutes lab/eviltwin.txt and lab/portals.txt appends here.
+                        if (subghz_host_recv_file_stream(line_buffer)) { line_pos = 0; continue; }
+
                         // Check for portal started
                         char *ap_name = strstr(line_buffer, "AP Name:");
                         if (ap_name != NULL) {
@@ -12904,6 +12929,11 @@ static void evil_twin_monitor_task(void *arg)
                     if (line_pos > 0) {
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "[%s] Evil Twin: %s", uart_name, line_buffer);
+
+                        // A streamed file (the C5 has no SD) is reassembled and written
+                        // to our /sdcard; its frame lines are not normal messages. The C5
+                        // reroutes lab/eviltwin.txt appends here during evil-twin capture.
+                        if (subghz_host_recv_file_stream(line_buffer)) { line_pos = 0; continue; }
 
                         // Look for client connection: "Client connected - MAC: XX:XX:XX:XX:XX:XX"
                         char *client_connected = strstr(line_buffer, "Client connected - MAC:");
@@ -17770,6 +17800,11 @@ static void phishing_portal_monitor_task(void *arg)
                     if (line_pos > 0) {
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "Portal monitor line: %s", line_buffer);
+
+                        // A streamed file (the C5 has no SD) is reassembled and written to
+                        // our /sdcard; its frame lines are not normal messages. The portal
+                        // reroutes lab/portals.txt appends and loot/portal/... files here.
+                        if (subghz_host_recv_file_stream(line_buffer)) { line_pos = 0; continue; }
 
                         // Check for password/form data capture
                         // Pattern: "Received POST data: ..." or "Portal password received: ..." or "Password: ..."
@@ -30722,6 +30757,11 @@ static void rogue_ap_monitor_task(void *arg)
                     if (line_pos > 0) {
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "[%s] RogueAP: %s", uart_name, line_buffer);
+
+                        // A streamed file (the C5 has no SD) is reassembled and written to
+                        // our /sdcard; its frame lines are not normal messages. Rogue AP
+                        // reroutes lab/eviltwin.txt and lab/portals.txt appends here.
+                        if (subghz_host_recv_file_stream(line_buffer)) { line_pos = 0; continue; }
 
                         // Parse memory info: "[MEM] start_rogueap: Internal=200/257KB, DMA=185/241KB, PSRAM=7436/8192KB"
                         // Parse client connections: "AP: Client connected - MAC: XX:XX:XX:XX:XX:XX"
