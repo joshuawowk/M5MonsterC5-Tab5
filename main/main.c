@@ -10194,13 +10194,17 @@ static void nmap_keyboard_cb(lv_event_t *e)
     }
 }
 
-// A164 typing on the nmap password field ends on Enter (READY) or Esc (CANCEL):
-// release the field from the A164 group so arrow keys navigate the page again.
+// Enter/OK (READY) in the nmap password field advances the flow -- fire the
+// Connect button, exactly like tapping it. Esc (CANCEL) just leaves the field.
+// Both release it from the A164 group so arrow keys navigate the page again.
 static void nmap_a164_exit_cb(lv_event_t *e)
 {
-    (void)e;
-    s_a164_ta = NULL;
-    a164_kbd_route_to(NULL);
+    lv_event_code_t code = lv_event_get_code(e);
+    if (s_a164_ta == nmap_password_input) { s_a164_ta = NULL; a164_kbd_route_to(NULL); }
+    if (code == LV_EVENT_READY && nmap_connect_btn && lv_obj_is_valid(nmap_connect_btn) &&
+        !lv_obj_has_state(nmap_connect_btn, LV_STATE_DISABLED)) {
+        lv_obj_send_event(nmap_connect_btn, LV_EVENT_CLICKED, NULL);
+    }
 }
 
 static void nmap_password_input_cb(lv_event_t *e)
