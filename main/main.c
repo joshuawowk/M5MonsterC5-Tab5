@@ -9115,6 +9115,101 @@ static int pcap_b64_decode_line(const char *in, uint8_t *out, size_t out_max)
     return (int)n;
 }
 
+/* ---- Generic file-stream receiver -------------------------------------------
+ * The MonsterC5 has no SD, so any file it wants stored is streamed to us and
+ * written to the Tab5's SD at /sdcard/<relpath>. Frames (mirror the PCAP path):
+ *   [FILEX name=<relpath> size=<n>]  [FILED]<base64>...  [FILEX-END sum=<hex>]
+ * Any UART-reading task can call subghz_host_recv_file_stream() on each line. */
+#define FILX_RX_MAX (256 * 1024)
+static uint8_t *g_filx_buf = NULL;
+static size_t   g_filx_len = 0, g_filx_expected = 0;
+static uint32_t g_filx_sum = 0;
+static bool     g_filx_active = false;
+static char     g_filx_relpath[128] = {0};
+
+/* mkdir every parent directory of a full /sdcard/... file path. */
+static void tab5_mkdir_parents(const char *path)
+{
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') { *p = '\0'; mkdir(tmp, 0777); *p = '/'; }
+    }
+}
+
+static bool tab5_recv_file_stream_line(const char *line)
+{
+    if (strncmp(line, "[FILEX name=", 12) == 0) {
+        g_filx_active = false; g_filx_len = 0; g_filx_sum = 0; g_filx_expected = 0;
+        g_filx_relpath[0] = '\0';
+        const char *n = line + 12;
+        const char *sp = strstr(n, " size=");
+        if (!sp) return true;
+        size_t nl = (size_t)(sp - n);
+        if (nl >= sizeof(g_filx_relpath)) nl = sizeof(g_filx_relpath) - 1;
+        memcpy(g_filx_relpath, n, nl); g_filx_relpath[nl] = '\0';
+        long sz = strtol(sp + 6, NULL, 10);
+        if (sz <= 0 || sz > FILX_RX_MAX) return true;
+        if (!g_filx_buf) g_filx_buf = heap_caps_malloc(FILX_RX_MAX, MALLOC_CAP_SPIRAM);
+        if (!g_filx_buf) return true;
+        g_filx_expected = (size_t)sz;
+        g_filx_active = true;
+        return true;
+    }
+    if (strncmp(line, "[FILED]", 7) == 0) {
+        if (!g_filx_active) return true;
+        uint8_t tmp[64];
+        int dn = pcap_b64_decode_line(line + 7, tmp, sizeof(tmp));
+        if (dn < 0) { g_filx_active = false; return true; }
+        for (int i = 0; i < dn && g_filx_len < g_filx_expected; i++) {
+            g_filx_buf[g_filx_len++] = tmp[i];
+            g_filx_sum += tmp[i];
+        }
+        return true;
+    }
+    if (strncmp(line, "[FILEX-END", 10) == 0) {
+        if (!g_filx_active) return true;
+        g_filx_active = false;
+        uint32_t want = 0;
+        const char *p = strstr(line, "sum=");
+        if (p) want = (uint32_t)strtoul(p + 4, NULL, 16);
+        if (g_filx_len == g_filx_expected && g_filx_sum == want && g_filx_relpath[0]) {
+            char path[220];
+            snprintf(path, sizeof(path), "/sdcard/%s", g_filx_relpath);
+            tab5_mkdir_parents(path);
+            /* never overwrite: insert _1/_2/... before the extension if present */
+            struct stat pst;
+            if (stat(path, &pst) == 0) {
+                char stem[180];
+                snprintf(stem, sizeof(stem), "/sdcard/%s", g_filx_relpath);
+                char suffix[12] = "";
+                char *ext = strrchr(stem, '.');
+                if (ext && strrchr(stem, '/') < ext) { snprintf(suffix, sizeof(suffix), "%s", ext); *ext = '\0'; }
+                for (int k = 1; k < 1000; k++) {
+                    snprintf(path, sizeof(path), "%s_%d%s", stem, k, suffix);
+                    if (stat(path, &pst) != 0) break;
+                }
+            }
+            FILE *f = fopen(path, "wb");
+            if (f) {
+                fwrite(g_filx_buf, 1, g_filx_len, f);
+                fclose(f);
+                ESP_LOGI(TAG, "[FILE-RX] saved %s (%u bytes)", path, (unsigned)g_filx_len);
+            } else {
+                ESP_LOGW(TAG, "[FILE-RX] could not open %s for write", path);
+            }
+        } else {
+            ESP_LOGW(TAG, "[FILE-RX] discarded '%s' (%u/%u bytes, sum %08lX/%08lX)",
+                     g_filx_relpath, (unsigned)g_filx_len, (unsigned)g_filx_expected,
+                     (unsigned long)g_filx_sum, (unsigned long)want);
+        }
+        return true;
+    }
+    return false;
+}
+
+bool subghz_host_recv_file_stream(const char *line) { return tab5_recv_file_stream_line(line); }
+
 // Handle one line of the [PCAPX]/[PCAPD]/[PCAPX-END] transfer. Returns true if the
 // line was part of a transfer (and should not be parsed as a normal log line).
 static bool handshaker_handle_pcap_line(const char *line)

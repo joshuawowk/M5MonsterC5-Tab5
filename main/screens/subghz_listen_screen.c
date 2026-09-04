@@ -675,6 +675,11 @@ static void handle_event_line(subghz_tab_state_t *st, const char *line)
 
 static void process_subghz_line(subghz_tab_state_t *st, const char *line)
 {
+    /* A streamed file (the C5 has no SD) is reassembled + written to our SD; its
+     * frame lines are not normal events. The C5 still prints [SUBGHZ_SAVE] after,
+     * so handle_event_line() shows the success message. */
+    if (subghz_host_recv_file_stream(line)) return;
+
     handle_event_line(st, line);
 
     subghz_note_radio_line(st, line);
