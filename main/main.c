@@ -20,6 +20,8 @@
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "esp_system.h"  // esp_restart() for orientation-toggle reboot
+#include "a164_keyboard.h"  // M5 Tab5 A164 physical keyboard (I2C 0x6D) -> LVGL
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -1164,6 +1166,11 @@ static tab_context_t internal_ctx = {0};
 static bool enable_red_team = false;  // Default: false (safe mode)
 static bool dashboard_enabled = true; // Home dashboard cards visibility
 static bool dark_mode_enabled = true; // Default theme
+// Display orientation: false = portrait 720x1280 (native, default),
+// true = landscape 1280x720 via LVGL software rotation (90deg). Applied once at
+// boot before any UI is built; toggling it in the Theme popup persists to NVS and
+// reboots so the whole UI re-lays-out cleanly against the swapped resolution.
+static bool g_landscape_mode = false;
 typedef enum {
     BOOT_SOUND_MODE_OFF = 0,
     BOOT_SOUND_MODE_NOKIA = 1,
@@ -2349,6 +2356,7 @@ static void settings_tile_event_cb(lv_event_t *e);
 static void settings_back_btn_event_cb(lv_event_t *e);
 static void show_scan_time_popup(void);
 static void show_theme_popup(void);
+static void app_kb_bind(lv_obj_t *kb, lv_obj_t *ta);  // on-screen + A164 physical kb bind
 static void style_theme_switch(lv_obj_t *sw);
 static void theme_dark_mode_switch_cb(lv_event_t *e);
 static void theme_boot_sound_dropdown_cb(lv_event_t *e);
@@ -3150,7 +3158,10 @@ static void home_read_remote_meta(tab_context_t *ctx)
         usb_rx_exclusive = false;
     }
 
-    ctx->home_handshake_count = pcap_count;
+    // Count = board's own handshakes (real MonsterC5) PLUS any streamed to the
+    // Tab5's local card (DIY MonsterC5 with no SD). The two dirs are disjoint, so
+    // this is correct for both and doesn't get clobbered to the board's 0.
+    ctx->home_handshake_count = pcap_count + count_local_pcap_files("/sdcard/lab/handshakes");
     ctx->home_wpasec_present  = wpasec_ok;
     ctx->home_vendors_present = vendors_ok;
     ctx->home_wigle_present   = wigle_ok;
@@ -3186,7 +3197,11 @@ static bool home_meta_refresh_allowed(const tab_context_t *ctx)
 static void trigger_home_meta_refresh(tab_context_t *ctx, bool force)
 {
     if (!ctx || !dashboard_enabled) return;
-    if (!ctx->sd_card_present) return;
+    // The dashboard reads the Tab5's own /sdcard (wigle/handshakes/etc), so run
+    // the refresh whenever EITHER the attached board or the Tab5 has a card. A DIY
+    // MonsterC5 with no card of its own still uses the Tab5's, so gating only on
+    // ctx->sd_card_present left the Files spinner running and stats blank forever.
+    if (!ctx->sd_card_present && !internal_sd_present) return;
     if (ctx->home_meta_refresh_running) return;
     if (!home_meta_refresh_allowed(ctx)) return;
     if (tab_id_for_ctx(ctx) != current_tab) return;
@@ -3310,7 +3325,7 @@ static void update_home_dashboard_labels(tab_context_t *ctx, int battery_pct)
     }
 
     if (ctx->home_handshakes_label) {
-        if (!ctx->sd_card_present) {
+        if (!ctx->sd_card_present && !internal_sd_present) {
             lv_label_set_text(ctx->home_handshakes_label, "NO SD");
             lv_obj_set_style_text_color(ctx->home_handshakes_label, COLOR_MATERIAL_RED, 0);
         } else {
@@ -3373,7 +3388,7 @@ static void update_home_dashboard_labels(tab_context_t *ctx, int battery_pct)
     }
 
     if (ctx->home_files_label && files_loaded) {
-        if (!ctx->sd_card_present) {
+        if (!ctx->sd_card_present && !internal_sd_present) {
             lv_label_set_text(ctx->home_files_label, "wpa-sec: " LV_SYMBOL_CLOSE);
             lv_obj_set_style_text_color(ctx->home_files_label, COLOR_MATERIAL_RED, 0);
             if (ctx->home_files_detail_label) {
@@ -7542,6 +7557,85 @@ static void create_tab_bar(void)
 }
 
 // Main tile click handler
+// ---- Grouped submenu popups (Detectors, Radios) ----------------------------
+// A home tile opens a small modal listing its grouped tools, keeping the home
+// grid tidy. Tapping an option closes the popup and opens that tool's page;
+// tapping the dimmed backdrop dismisses.
+static lv_obj_t *g_submenu_popup = NULL;
+
+static void submenu_popup_dismiss(void)
+{
+    if (g_submenu_popup) {
+        lv_obj_del(g_submenu_popup);
+        g_submenu_popup = NULL;
+    }
+}
+
+static void submenu_popup_overlay_cb(lv_event_t *e)
+{
+    if (lv_event_get_target(e) == lv_event_get_current_target(e)) {
+        submenu_popup_dismiss();
+    }
+}
+
+static void submenu_option_cb(lv_event_t *e)
+{
+    const char *name = (const char *)lv_event_get_user_data(e);
+    submenu_popup_dismiss();
+    if (!name) return;
+    if (strcmp(name, "Deauth Detector") == 0) show_deauth_detector_page();
+    else if (strcmp(name, "Anti-Surv") == 0) show_antisurv_page();
+    else if (strcmp(name, "Sub-GHz") == 0) show_subghz_page();
+    else if (strcmp(name, "Jammer") == 0) show_jammer_page();
+}
+
+static void show_group_submenu(const char *title, bool radios)
+{
+    lv_obj_t *container = get_current_tab_container();
+    if (!container || g_submenu_popup) return;
+
+    g_submenu_popup = lv_obj_create(container);
+    style_modal_overlay(g_submenu_popup, dark_mode_enabled ? LV_OPA_50 : LV_OPA_30);
+    lv_obj_add_flag(g_submenu_popup, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(g_submenu_popup, submenu_popup_overlay_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *card = lv_obj_create(g_submenu_popup);
+    lv_obj_set_size(card, 500, LV_SIZE_CONTENT);
+    lv_obj_center(card);
+    style_popup_card(card, 12, ui_tab_icon_color());
+    lv_obj_set_style_pad_all(card, 16, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(card, 12, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *ttl = lv_label_create(card);
+    lv_label_set_text(ttl, title);
+    lv_obj_set_style_text_font(ttl, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_color(ttl, dark_mode_enabled ? COLOR_LAB5_MAGENTA : ui_tab_icon_color(), 0);
+
+    lv_obj_t *row = lv_obj_create(card);
+    lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 4, 0);
+    lv_obj_set_style_pad_gap(row, 12, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    if (radios) {
+        create_tile(row, LV_SYMBOL_BARS, "Sub-GHz", COLOR_MATERIAL_PINK, submenu_option_cb, "Sub-GHz");
+        create_tile(row, LV_SYMBOL_WARNING, "Jammer", COLOR_MATERIAL_RED, submenu_option_cb, "Jammer");
+    } else {
+        create_tile(row, LV_SYMBOL_EYE_OPEN, "Deauth\nDetector", COLOR_MATERIAL_AMBER, submenu_option_cb, "Deauth Detector");
+        create_tile(row, LV_SYMBOL_EYE_OPEN, "Anti-Surv", COLOR_MATERIAL_PINK, submenu_option_cb, "Anti-Surv");
+    }
+}
+
+static void show_detectors_popup(void) { show_group_submenu("Detectors", false); }
+static void show_radios_popup(void) { show_group_submenu("Radios", true); }
+
 static void main_tile_event_cb(lv_event_t *e)
 {
     const char *tile_name = (const char *)lv_event_get_user_data(e);
@@ -7574,6 +7668,10 @@ static void main_tile_event_cb(lv_event_t *e)
         show_wardrive_page();
     } else if (strcmp(tile_name, "Anti-Surv") == 0) {
         show_antisurv_page();
+    } else if (strcmp(tile_name, "Detectors") == 0) {
+        show_detectors_popup();
+    } else if (strcmp(tile_name, "Radios") == 0) {
+        show_radios_popup();
     } else if (strcmp(tile_name, "IoT") == 0) {
         show_zig_recon_page();
     } else if (strcmp(tile_name, "Sub-GHz") == 0) {
@@ -7671,7 +7769,7 @@ static void hidden_ssid_textarea_focus_cb(lv_event_t *e)
     (void)e;
     if (hidden_ssid_keyboard) {
         lv_obj_clear_flag(hidden_ssid_keyboard, LV_OBJ_FLAG_HIDDEN);
-        lv_keyboard_set_textarea(hidden_ssid_keyboard, hidden_ssid_textarea);
+        app_kb_bind(hidden_ssid_keyboard, hidden_ssid_textarea);
     }
 }
 
@@ -7891,7 +7989,7 @@ static void show_hidden_ssid_popup(hidden_ssid_callback_t callback)
     lv_obj_set_size(hidden_ssid_keyboard, lv_pct(100), 260);
     lv_obj_align(hidden_ssid_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     style_on_screen_keyboard(hidden_ssid_keyboard);
-    lv_keyboard_set_textarea(hidden_ssid_keyboard, hidden_ssid_textarea);
+    app_kb_bind(hidden_ssid_keyboard, hidden_ssid_textarea);
     lv_obj_add_flag(hidden_ssid_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(hidden_ssid_keyboard, hidden_ssid_keyboard_ready_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(hidden_ssid_keyboard, hidden_ssid_keyboard_ready_cb, LV_EVENT_CANCEL, NULL);
@@ -8444,7 +8542,7 @@ static void mitm_password_input_cb(lv_event_t *e)
     }
     if (ctx && ctx->mitm_keyboard) {
         lv_obj_clear_flag(ctx->mitm_keyboard, LV_OBJ_FLAG_HIDDEN);
-        lv_keyboard_set_textarea(ctx->mitm_keyboard, ctx->mitm_password_input);
+        app_kb_bind(ctx->mitm_keyboard, ctx->mitm_password_input);
     }
 }
 
@@ -8826,7 +8924,7 @@ static void show_mitm_popup(void)
     lv_obj_set_size(ctx->mitm_keyboard, lv_pct(100), 260);
     lv_obj_align(ctx->mitm_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     style_on_screen_keyboard(ctx->mitm_keyboard);
-    lv_keyboard_set_textarea(ctx->mitm_keyboard, ctx->mitm_password_input);
+    app_kb_bind(ctx->mitm_keyboard, ctx->mitm_password_input);
     lv_obj_add_event_cb(ctx->mitm_keyboard, mitm_keyboard_cb, LV_EVENT_ALL, NULL);
     lv_obj_add_flag(ctx->mitm_keyboard, LV_OBJ_FLAG_HIDDEN);
 }
@@ -8968,6 +9066,118 @@ static void append_handshaker_log(const char *message, hs_log_type_t log_type)
 }
 
 // Handshaker monitor task - reads UART for handshake capture
+// ---- Rerouted handshake PCAP reception (board with no SD streams it to us) ----
+// The board sends captured PCAPs base64-framed over UART; we reassemble and save
+// them to the Tab5's own /sdcard so they show up in Compromised Data.
+#define PCAP_RX_MAX (96 * 1024)
+static uint8_t *g_pcap_rx_buf = NULL;
+static size_t g_pcap_rx_len = 0;
+static size_t g_pcap_rx_expected = 0;
+static uint32_t g_pcap_rx_sum = 0;
+static bool g_pcap_rx_active = false;
+static char g_pcap_rx_name[96] = {0};
+
+static int pcap_b64_val(char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+static int pcap_b64_decode_line(const char *in, uint8_t *out, size_t out_max)
+{
+    int acc = 0, nbits = 0;
+    size_t n = 0;
+    for (const char *p = in; *p; p++) {
+        if (*p == '=' || *p == '\r' || *p == '\n' || *p == ' ') continue;
+        int v = pcap_b64_val(*p);
+        if (v < 0) return -1;
+        acc = (acc << 6) | v;
+        nbits += 6;
+        if (nbits >= 8) {
+            nbits -= 8;
+            if (n >= out_max) return -1;
+            out[n++] = (uint8_t)((acc >> nbits) & 0xFF);
+        }
+    }
+    return (int)n;
+}
+
+// Handle one line of the [PCAPX]/[PCAPD]/[PCAPX-END] transfer. Returns true if the
+// line was part of a transfer (and should not be parsed as a normal log line).
+static bool handshaker_handle_pcap_line(const char *line)
+{
+    if (strncmp(line, "[PCAPX name=", 12) == 0) {
+        g_pcap_rx_active = false;
+        g_pcap_rx_len = 0;
+        g_pcap_rx_sum = 0;
+        g_pcap_rx_expected = 0;
+        g_pcap_rx_name[0] = '\0';
+        const char *n = line + 12;
+        const char *sp = strstr(n, " size=");
+        if (sp) {
+            size_t nl = (size_t)(sp - n);
+            if (nl >= sizeof(g_pcap_rx_name)) nl = sizeof(g_pcap_rx_name) - 1;
+            memcpy(g_pcap_rx_name, n, nl);
+            g_pcap_rx_name[nl] = '\0';
+            g_pcap_rx_expected = (size_t)strtoul(sp + 6, NULL, 10);
+        }
+        if (!g_pcap_rx_buf) {
+            g_pcap_rx_buf = heap_caps_malloc(PCAP_RX_MAX, MALLOC_CAP_SPIRAM);
+        }
+        g_pcap_rx_active = (g_pcap_rx_buf && g_pcap_rx_name[0] &&
+                            g_pcap_rx_expected > 0 && g_pcap_rx_expected <= PCAP_RX_MAX);
+        return true;
+    }
+    if (strncmp(line, "[PCAPD]", 7) == 0) {
+        if (g_pcap_rx_active && g_pcap_rx_buf) {
+            int got = pcap_b64_decode_line(line + 7, g_pcap_rx_buf + g_pcap_rx_len,
+                                           PCAP_RX_MAX - g_pcap_rx_len);
+            if (got < 0) {
+                g_pcap_rx_active = false;
+            } else {
+                for (int i = 0; i < got; i++) g_pcap_rx_sum += g_pcap_rx_buf[g_pcap_rx_len + i];
+                g_pcap_rx_len += (size_t)got;
+            }
+        }
+        return true;
+    }
+    if (strncmp(line, "[PCAPX-END", 10) == 0) {
+        bool ok = g_pcap_rx_active && g_pcap_rx_len == g_pcap_rx_expected;
+        const char *sp = strstr(line, "sum=");
+        if (ok && sp) {
+            uint32_t want = (uint32_t)strtoul(sp + 4, NULL, 16);
+            if (want != g_pcap_rx_sum) ok = false;
+        }
+        if (ok) {
+            struct stat st = {0};
+            if (stat("/sdcard/lab/handshakes", &st) == -1) {
+                mkdir("/sdcard/lab", 0777);
+                mkdir("/sdcard/lab/handshakes", 0777);
+            }
+            char path[168];
+            snprintf(path, sizeof(path), "/sdcard/lab/handshakes/%s", g_pcap_rx_name);
+            FILE *f = fopen(path, "wb");
+            if (f) {
+                fwrite(g_pcap_rx_buf, 1, g_pcap_rx_len, f);
+                fclose(f);
+                ESP_LOGI(TAG, "[PCAP-RX] saved %s (%u bytes)", path, (unsigned)g_pcap_rx_len);
+            } else {
+                ESP_LOGW(TAG, "[PCAP-RX] could not open %s for write", path);
+            }
+        } else {
+            ESP_LOGW(TAG, "[PCAP-RX] discarded '%s' (%u/%u bytes)", g_pcap_rx_name,
+                     (unsigned)g_pcap_rx_len, (unsigned)g_pcap_rx_expected);
+        }
+        g_pcap_rx_active = false;
+        return true;
+    }
+    return false;
+}
+
 static void handshaker_monitor_task(void *arg)
 {
     // Get context passed to task (so we use correct ctx even if tab changes)
@@ -9005,6 +9215,13 @@ static void handshaker_monitor_task(void *arg)
                     if (line_pos > 0) {
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "Handshaker UART: %s", line_buffer);
+
+                        // A streamed PCAP (board has no SD) is reassembled + saved
+                        // to our /sdcard; those frame lines are not normal messages.
+                        if (handshaker_handle_pcap_line(line_buffer)) {
+                            line_pos = 0;
+                            continue;
+                        }
 
                         // Determine message type and log it
                         hs_log_type_t log_type = HS_LOG_PROGRESS;
@@ -9470,7 +9687,7 @@ static void arp_password_input_cb(lv_event_t *e)
     (void)e;
     if (arp_keyboard) {
         lv_obj_clear_flag(arp_keyboard, LV_OBJ_FLAG_HIDDEN);
-        lv_keyboard_set_textarea(arp_keyboard, arp_password_input);
+        app_kb_bind(arp_keyboard, arp_password_input);
     }
 }
 
@@ -9963,7 +10180,7 @@ static void nmap_password_input_cb(lv_event_t *e)
     (void)e;
     if (nmap_keyboard) {
         lv_obj_clear_flag(nmap_keyboard, LV_OBJ_FLAG_HIDDEN);
-        lv_keyboard_set_textarea(nmap_keyboard, nmap_password_input);
+        app_kb_bind(nmap_keyboard, nmap_password_input);
     }
 }
 
@@ -11572,7 +11789,7 @@ static void show_arp_poison_page(void)
         lv_obj_set_size(arp_keyboard, lv_pct(100), 260);  // Larger keys
         lv_obj_align(arp_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);  // Pin to bottom
         style_on_screen_keyboard(arp_keyboard);
-        lv_keyboard_set_textarea(arp_keyboard, arp_password_input);
+        app_kb_bind(arp_keyboard, arp_password_input);
         lv_obj_add_event_cb(arp_keyboard, arp_keyboard_cb, LV_EVENT_ALL, NULL);
         lv_obj_add_flag(arp_keyboard, LV_OBJ_FLAG_HIDDEN);
     }
@@ -13109,12 +13326,9 @@ static void update_subghz_tile_visibility(tab_context_t *ctx)
         return;
     }
 
-    // If the tile exists, ensure it matches the current capability flag.
-    if (ctx->has_subghz) {
-        lv_obj_clear_flag(ctx->subghz_tile, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(ctx->subghz_tile, LV_OBJ_FLAG_HIDDEN);
-    }
+    // The Radios tile is always visible now (keeps the home grid at 10 tiles);
+    // radio availability is surfaced inside the Radios submenu instead.
+    lv_obj_clear_flag(ctx->subghz_tile, LV_OBJ_FLAG_HIDDEN);
 }
 
 // Create tiles for UART tabs inside given container
@@ -13164,7 +13378,10 @@ static void create_uart_tiles_in_container(lv_obj_t *container, tab_context_t *c
     lv_obj_set_style_pad_gap(tile_grid, tile_gap, 0);
     lv_obj_set_flex_flow(tile_grid, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(tile_grid, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_clear_flag(tile_grid, LV_OBJ_FLAG_SCROLLABLE);
+    // Scroll vertically when the wrapped tiles exceed the visible height (e.g. in
+    // landscape). Harmless in portrait where they already fit.
+    lv_obj_add_flag(tile_grid, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(tile_grid, LV_DIR_VER);
 
     create_tile(tile_grid, LV_SYMBOL_WIFI,
         enable_red_team ? "WiFi Scan\n& Attack" : "WiFi Scan\n& Test",
@@ -13173,18 +13390,40 @@ static void create_uart_tiles_in_container(lv_obj_t *container, tab_context_t *c
         enable_red_team ? "Global WiFi\nAttacks" : "Global WiFi\nTests",
         COLOR_MATERIAL_RED, main_tile_event_cb, "Global WiFi Attacks");
     create_tile(tile_grid, LV_SYMBOL_SAVE, "Compromised\nData", COLOR_MATERIAL_GREEN, main_tile_event_cb, "Compromised Data");
-    create_tile(tile_grid, LV_SYMBOL_EYE_OPEN, "Deauth\nDetector", COLOR_MATERIAL_AMBER, main_tile_event_cb, "Deauth Detector");
+    create_tile(tile_grid, LV_SYMBOL_EYE_OPEN, "Detectors", COLOR_MATERIAL_AMBER, main_tile_event_cb, "Detectors");
     create_tile(tile_grid, LV_SYMBOL_BLUETOOTH, "Bluetooth", COLOR_MATERIAL_CYAN, main_tile_event_cb, "Bluetooth");
     create_tile(tile_grid, LV_SYMBOL_LOOP, "Network\nObserver", COLOR_MATERIAL_TEAL, main_tile_event_cb, "Network Observer");
     create_tile(tile_grid, LV_SYMBOL_WIFI, "Karma", COLOR_MATERIAL_ORANGE, main_tile_event_cb, "Karma");
     create_tile(tile_grid, LV_SYMBOL_GPS, "Wardrive", COLOR_MATERIAL_TEAL, main_tile_event_cb, "Wardrive");
-    create_tile(tile_grid, LV_SYMBOL_EYE_OPEN, "Anti-Surv", COLOR_MATERIAL_PINK, main_tile_event_cb, "Anti-Surv");
     create_tile(tile_grid, LV_SYMBOL_BARS, "Mesh\nRecon", COLOR_MATERIAL_PURPLE, main_tile_event_cb, "IoT");
-    if (ctx && ctx->has_subghz) {
-        ctx->subghz_tile = create_tile(tile_grid, LV_SYMBOL_BARS, "Sub-GHz",
-                                       COLOR_MATERIAL_PINK, main_tile_event_cb, "Sub-GHz");
-    } else if (ctx) {
-        ctx->subghz_tile = NULL;
+    if (ctx) {
+        // Radios is always shown so the home grid stays at 10 tiles; the submenu
+        // itself surfaces Sub-GHz / nRF24 availability when tapped.
+        ctx->subghz_tile = create_tile(tile_grid, LV_SYMBOL_BARS, "Radios",
+                                       COLOR_MATERIAL_PINK, main_tile_event_cb, "Radios");
+    }
+
+    // In landscape the wide aspect leaves the fixed-size tiles floating with empty
+    // space; lay them out as a 5x2 grid that stretches to fill the tile area.
+    // Portrait keeps the wrapping layout (it already fits the tall aspect well).
+    {
+        uint32_t tile_n = lv_obj_get_child_count(tile_grid);
+        if (g_landscape_mode && tile_n == 10) {
+            static const int32_t col5[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
+                                           LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
+            static const int32_t row2[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
+            lv_obj_set_style_pad_row(tile_grid, tile_gap, 0);
+            lv_obj_set_style_pad_column(tile_grid, tile_gap, 0);
+            lv_obj_set_style_pad_top(tile_grid, 8, 0);
+            lv_obj_set_style_pad_bottom(tile_grid, 8, 0);
+            lv_obj_set_grid_dsc_array(tile_grid, col5, row2);
+            lv_obj_set_layout(tile_grid, LV_LAYOUT_GRID);
+            for (uint32_t i = 0; i < tile_n; i++) {
+                lv_obj_t *t = lv_obj_get_child(tile_grid, i);
+                lv_obj_set_grid_cell(t, LV_GRID_ALIGN_STRETCH, (int32_t)(i % 5), 1,
+                                     LV_GRID_ALIGN_STRETCH, (int32_t)(i / 5), 1);
+            }
+        }
     }
 
     if (dashboard_enabled) {
@@ -13490,7 +13729,8 @@ static void show_internal_tiles(void)
     lv_obj_set_style_pad_gap(internal_tiles, 10, 0);
     lv_obj_set_flex_flow(internal_tiles, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(internal_tiles, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_clear_flag(internal_tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(internal_tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(internal_tiles, LV_DIR_VER);
 
     // Create 2 tiles for INTERNAL tab
     create_tile(internal_tiles, LV_SYMBOL_SETTINGS, "Settings", COLOR_MATERIAL_PURPLE, internal_tile_event_cb, "Settings");
@@ -16197,7 +16437,11 @@ static bool current_tab_has_sd_card(void)
     if (tab_is_internal(current_tab)) {
         return internal_sd_present;
     }
-    return ctx->sd_card_present;
+    // Fall back to the Tab5's own SD. The SD-gated features (captive-portal HTML,
+    // wardrive logs, handshakes) are stored on the Tab5's /sdcard, so an attached
+    // board that has no card of its own (e.g. a DIY MonsterC5) can still use the
+    // Tab5's card instead of being told "no SD card".
+    return ctx->sd_card_present || internal_sd_present;
 }
 
 // Close SD warning popup
@@ -17575,7 +17819,7 @@ static void phishing_portal_keyboard_cb(lv_event_t *e)
     if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
         lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
         if (ctx && ctx->phishing_portal_ssid_textarea) {
-            lv_keyboard_set_textarea(kb, ctx->phishing_portal_ssid_textarea);
+            app_kb_bind(kb, ctx->phishing_portal_ssid_textarea);
         }
     }
 }
@@ -17589,7 +17833,7 @@ static void phishing_portal_textarea_focus_cb(lv_event_t *e)
 
     if (code == LV_EVENT_FOCUSED) {
         if (ctx && ctx->phishing_portal_keyboard) {
-            lv_keyboard_set_textarea(ctx->phishing_portal_keyboard, ctx->phishing_portal_ssid_textarea);
+            app_kb_bind(ctx->phishing_portal_keyboard, ctx->phishing_portal_ssid_textarea);
             lv_obj_clear_flag(ctx->phishing_portal_keyboard, LV_OBJ_FLAG_HIDDEN);
         }
     } else if (code == LV_EVENT_DEFOCUSED) {
@@ -17732,7 +17976,7 @@ static void show_phishing_portal_popup(void)
     lv_obj_set_size(ctx->phishing_portal_keyboard, lv_pct(100), 260);  // Larger keys
     lv_obj_align(ctx->phishing_portal_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     style_on_screen_keyboard(ctx->phishing_portal_keyboard);
-    lv_keyboard_set_textarea(ctx->phishing_portal_keyboard, ctx->phishing_portal_ssid_textarea);
+    app_kb_bind(ctx->phishing_portal_keyboard, ctx->phishing_portal_ssid_textarea);
     lv_obj_add_event_cb(ctx->phishing_portal_keyboard, phishing_portal_keyboard_cb, LV_EVENT_ALL, ctx);
     lv_obj_add_flag(ctx->phishing_portal_keyboard, LV_OBJ_FLAG_HIDDEN);
 }
@@ -19780,7 +20024,7 @@ static void wardrive_wigle_text_input_cb(lv_event_t *e)
     lv_obj_t *ta = lv_event_get_target(e);
     lv_textarea_set_placeholder_text(ta, "");
     lv_obj_clear_flag(ctx->wardrive_wigle_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_keyboard_set_textarea(ctx->wardrive_wigle_keyboard, ta);
+    app_kb_bind(ctx->wardrive_wigle_keyboard, ta);
 }
 
 static void wardrive_wigle_keyboard_cb(lv_event_t *e)
@@ -19962,7 +20206,7 @@ static void wardrive_wigle_create_credentials_prompt(tab_context_t *ctx, bool wi
     lv_obj_add_flag(ctx->wardrive_wigle_keyboard, LV_OBJ_FLAG_FLOATING);
     lv_obj_align(ctx->wardrive_wigle_keyboard, LV_ALIGN_BOTTOM_MID, 0, -8);
     style_on_screen_keyboard(ctx->wardrive_wigle_keyboard);
-    lv_keyboard_set_textarea(ctx->wardrive_wigle_keyboard,
+    app_kb_bind(ctx->wardrive_wigle_keyboard,
                              with_ssid ? ctx->wardrive_wigle_ssid_input : ctx->wardrive_wigle_password_input);
     lv_obj_add_event_cb(ctx->wardrive_wigle_keyboard, wardrive_wigle_keyboard_cb, LV_EVENT_ALL, NULL);
     lv_obj_add_flag(ctx->wardrive_wigle_keyboard, LV_OBJ_FLAG_HIDDEN);
@@ -22530,7 +22774,7 @@ static void home_mgmt_ta_focus_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (!ctx || !ctx->home_mgmt_keyboard) return;
     if (code == LV_EVENT_FOCUSED) {
-        lv_keyboard_set_textarea(ctx->home_mgmt_keyboard, ta);
+        app_kb_bind(ctx->home_mgmt_keyboard, ta);
         lv_obj_clear_flag(ctx->home_mgmt_keyboard, LV_OBJ_FLAG_HIDDEN);
     } else if (code == LV_EVENT_DEFOCUSED || code == LV_EVENT_READY) {
         lv_obj_add_flag(ctx->home_mgmt_keyboard, LV_OBJ_FLAG_HIDDEN);
@@ -24332,7 +24576,7 @@ static void wardrive_setup_ta_focus_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (!ctx || !ctx->wardrive_setup_keyboard) return;
     if (code == LV_EVENT_FOCUSED) {
-        lv_keyboard_set_textarea(ctx->wardrive_setup_keyboard, ta);
+        app_kb_bind(ctx->wardrive_setup_keyboard, ta);
         lv_obj_clear_flag(ctx->wardrive_setup_keyboard, LV_OBJ_FLAG_HIDDEN);
     } else if (code == LV_EVENT_DEFOCUSED || code == LV_EVENT_READY) {
         lv_obj_add_flag(ctx->wardrive_setup_keyboard, LV_OBJ_FLAG_HIDDEN);
@@ -25705,7 +25949,7 @@ static void wardrive_blacklist_ta_focus_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (!ctx || !ctx->wardrive_blacklist_keyboard) return;
     if (code == LV_EVENT_FOCUSED) {
-        lv_keyboard_set_textarea(ctx->wardrive_blacklist_keyboard, ta);
+        app_kb_bind(ctx->wardrive_blacklist_keyboard, ta);
         lv_obj_clear_flag(ctx->wardrive_blacklist_keyboard, LV_OBJ_FLAG_HIDDEN);
     } else if (code == LV_EVENT_DEFOCUSED || code == LV_EVENT_READY) {
         lv_obj_add_flag(ctx->wardrive_blacklist_keyboard, LV_OBJ_FLAG_HIDDEN);
@@ -28000,7 +28244,7 @@ static bool compromised_extract_file_token(const char *line, char *out, size_t o
 
 static int compromised_load_handshake_files(tab_context_t *ctx, tab_id_t active_tab, uart_port_t uart_port)
 {
-    if (!ctx || tab_is_internal(active_tab)) {
+    if (!ctx) {
         return 0;
     }
 
@@ -28013,6 +28257,28 @@ static int compromised_load_handshake_files(tab_context_t *ctx, tab_id_t active_
     static const char *exts[] = { ".pcap" };
 
     compromised_listing_reset_files(ctx);
+
+    // Handshakes the board streamed to us (it has no SD of its own) are saved on
+    // the Tab5's own /sdcard. List those first so they show regardless of tab.
+    {
+        DIR *ld = opendir("/sdcard/lab/handshakes");
+        if (ld) {
+            struct dirent *lent;
+            while ((lent = readdir(ld)) != NULL &&
+                   ctx->wardrive_wigle_file_count < WARDRIVE_WIGLE_MAX_FILES) {
+                if (strstr(lent->d_name, ".pcap") != NULL) {
+                    wardrive_wigle_store_file(ctx, "/sdcard/lab/handshakes", lent->d_name);
+                }
+            }
+            closedir(ld);
+        }
+    }
+
+    // Internal tab has no board to query; and if we already got captures locally,
+    // there's no need to ask the board's (absent) card.
+    if (tab_is_internal(active_tab) || ctx->wardrive_wigle_file_count > 0) {
+        return ctx->wardrive_wigle_file_count;
+    }
 
     bool usb_lock_set = false;
     compromised_transport_lock_begin(active_tab, uart_port, &usb_lock_set);
@@ -29854,7 +30120,8 @@ static void show_compromised_data_page(void)
     lv_obj_set_style_pad_gap(tiles, 10, 0);
     lv_obj_set_flex_flow(tiles, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(tiles, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_clear_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(tiles, LV_DIR_VER);
 
     // Create 4 tiles (same flow as main menu)
     create_tile(tiles, LV_SYMBOL_LIST, "Evil Twin\nPasswords", COLOR_MATERIAL_AMBER, compromised_data_tile_event_cb, "Evil Twin Passwords");
@@ -30254,7 +30521,7 @@ static void rogue_ap_password_focus_cb(lv_event_t *e)
     tab_context_t *ctx = get_current_ctx();
     if (ctx && ctx->rogue_ap_keyboard) {
         lv_obj_clear_flag(ctx->rogue_ap_keyboard, LV_OBJ_FLAG_HIDDEN);
-        lv_keyboard_set_textarea(ctx->rogue_ap_keyboard, ta);
+        app_kb_bind(ctx->rogue_ap_keyboard, ta);
     }
 }
 
@@ -30797,7 +31064,7 @@ static void show_rogue_ap_page(void)
         lv_obj_set_size(ctx->rogue_ap_keyboard, lv_pct(100), 260);
         lv_obj_align(ctx->rogue_ap_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
         style_on_screen_keyboard(ctx->rogue_ap_keyboard);
-        lv_keyboard_set_textarea(ctx->rogue_ap_keyboard, ctx->rogue_ap_password_input);
+        app_kb_bind(ctx->rogue_ap_keyboard, ctx->rogue_ap_password_input);
         lv_obj_add_flag(ctx->rogue_ap_keyboard, LV_OBJ_FLAG_HIDDEN);
 
         // Add event handler to show keyboard when textarea is clicked
@@ -32962,7 +33229,7 @@ static void wpasec_text_input_cb(lv_event_t *e)
     lv_obj_t *ta = lv_event_get_target(e);
     lv_textarea_set_placeholder_text(ta, "");
     lv_obj_clear_flag(ctx->wpasec_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_keyboard_set_textarea(ctx->wpasec_keyboard, ta);
+    app_kb_bind(ctx->wpasec_keyboard, ta);
 }
 
 // Keyboard ready/cancel - hide keyboard
@@ -33113,7 +33380,7 @@ static void wpasec_create_credentials_prompt(tab_context_t *ctx, bool with_ssid)
     lv_obj_set_size(ctx->wpasec_keyboard, lv_pct(100), 260);
     lv_obj_align(ctx->wpasec_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     style_on_screen_keyboard(ctx->wpasec_keyboard);
-    lv_keyboard_set_textarea(ctx->wpasec_keyboard, with_ssid ? ssid_input : ctx->wpasec_password_input);
+    app_kb_bind(ctx->wpasec_keyboard, with_ssid ? ssid_input : ctx->wpasec_password_input);
     lv_obj_add_event_cb(ctx->wpasec_keyboard, wpasec_keyboard_cb, LV_EVENT_ALL, NULL);
     lv_obj_add_flag(ctx->wpasec_keyboard, LV_OBJ_FLAG_HIDDEN);
 }
@@ -34315,7 +34582,8 @@ static void show_bluetooth_menu_page(void)
     lv_obj_set_flex_flow(tiles, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(tiles, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_gap(tiles, 15, 0);
-    lv_obj_clear_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(tiles, LV_DIR_VER);
 
     create_tile(tiles, LV_SYMBOL_GPS, "AirTag\nScan",
                 dark_mode_enabled ? COLOR_LAB5_MAGENTA : ui_tab_icon_color(),
@@ -34323,13 +34591,7 @@ static void show_bluetooth_menu_page(void)
     create_tile(tiles, LV_SYMBOL_BLUETOOTH, "BT Scan\n& Locate",
                 ui_tab_icon_color(),
                 bt_menu_tile_event_cb, "BT Scan & Locate");
-    // Jammer needs the MonsterRF/Sub-GHz (nRF24) module - show only when detected,
-    // mirroring the Sub-GHz tile gating in the main menu.
-    if (ctx && ctx->has_subghz) {
-        create_tile(tiles, LV_SYMBOL_WARNING, "Jammer",
-                    COLOR_MATERIAL_RED,
-                    bt_menu_tile_event_cb, "Jammer");
-    }
+    // (The nRF24 Jammer moved to the "Radios" group tile on the home screen.)
 
     // Set current visible page
     ctx->current_visible_page = ctx->bt_menu_page;
@@ -36477,7 +36739,7 @@ static void beacon_ssids_textarea_focus_cb(lv_event_t *e)
     tab_context_t *ctx = get_current_ctx();
     if (!ctx || !ctx->beacon_ssids_keyboard || !ctx->beacon_ssids_add_textarea) return;
 
-    lv_keyboard_set_textarea(ctx->beacon_ssids_keyboard, ctx->beacon_ssids_add_textarea);
+    app_kb_bind(ctx->beacon_ssids_keyboard, ctx->beacon_ssids_add_textarea);
     lv_obj_clear_flag(ctx->beacon_ssids_keyboard, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -36599,7 +36861,7 @@ static void beacon_ssids_add_new_cb(lv_event_t *e)
     lv_obj_align(ctx->beacon_ssids_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     style_on_screen_keyboard(ctx->beacon_ssids_keyboard);
     lv_obj_set_style_text_font(ctx->beacon_ssids_keyboard, &lv_font_montserrat_16, LV_PART_ITEMS);
-    lv_keyboard_set_textarea(ctx->beacon_ssids_keyboard, ctx->beacon_ssids_add_textarea);
+    app_kb_bind(ctx->beacon_ssids_keyboard, ctx->beacon_ssids_add_textarea);
     lv_obj_add_flag(ctx->beacon_ssids_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(ctx->beacon_ssids_keyboard, beacon_ssids_keyboard_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(ctx->beacon_ssids_keyboard, beacon_ssids_keyboard_cb, LV_EVENT_CANCEL, NULL);
@@ -36896,7 +37158,8 @@ static void show_beacon_spam_page(void)
     lv_obj_set_style_pad_gap(tiles, 10, 0);
     lv_obj_set_flex_flow(tiles, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(tiles, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_clear_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(tiles, LV_DIR_VER);
 
     create_tile(tiles, LV_SYMBOL_LIST, "List SSIDs", COLOR_MATERIAL_CYAN, beacon_spam_tile_event_cb, "List SSIDs");
     create_tile(tiles, LV_SYMBOL_WIFI, "Start Spam", COLOR_MATERIAL_RED, beacon_spam_tile_event_cb, "Start Spam");
@@ -37032,7 +37295,8 @@ static void show_global_attacks_page(void)
     lv_obj_set_style_pad_gap(tiles, 10, 0);
     lv_obj_set_flex_flow(tiles, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_set_flex_align(tiles, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_clear_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(tiles, LV_DIR_VER);
 
     // Create attack tiles (some only visible when Red Team enabled)
 
@@ -37084,6 +37348,7 @@ static __attribute__((unused)) lv_obj_t *settings_popup_obj = NULL;
 #define NVS_KEY_CLOCK_SHOW      "clock_show"
 #define NVS_KEY_SCREEN_LOCK     "scr_lock"
 #define NVS_KEY_AUTO_LOCK       "scr_autolock"
+#define NVS_KEY_ORIENTATION     "orientation"
 #define NVS_KEY_WD_AUTOUP_EN    "wd_au_en"
 #define NVS_KEY_WD_AUTOUP_WIGLE "wd_au_wg"
 #define NVS_KEY_WD_AUTOUP_WDG   "wd_au_wdg"
@@ -37207,6 +37472,16 @@ static void load_screen_settings_from_nvs(void)
         } else {
             dark_mode_enabled = true;
             ESP_LOGI(TAG, "No Dark Mode setting in NVS, using default: ON");
+        }
+
+        uint8_t orientation = 0;
+        err = nvs_get_u8(nvs, NVS_KEY_ORIENTATION, &orientation);
+        if (err == ESP_OK) {
+            g_landscape_mode = (orientation != 0);
+            ESP_LOGI(TAG, "Loaded Orientation from NVS: %s", g_landscape_mode ? "LANDSCAPE" : "PORTRAIT");
+        } else {
+            g_landscape_mode = false;
+            ESP_LOGI(TAG, "No Orientation setting in NVS, using default: PORTRAIT");
         }
 
         uint8_t scr_lock = 1;
@@ -37388,6 +37663,96 @@ static void save_dark_mode_to_nvs(bool enabled)
     } else {
         ESP_LOGE(TAG, "Failed to open NVS for writing Dark Mode: %s", esp_err_to_name(err));
     }
+}
+
+static void save_orientation_to_nvs(bool landscape)
+{
+    nvs_handle_t nvs;
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (err == ESP_OK) {
+        nvs_set_u8(nvs, NVS_KEY_ORIENTATION, landscape ? 1 : 0);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+        ESP_LOGI(TAG, "Saved Orientation to NVS: %s", landscape ? "LANDSCAPE" : "PORTRAIT");
+    } else {
+        ESP_LOGE(TAG, "Failed to open NVS for writing Orientation: %s", esp_err_to_name(err));
+    }
+}
+
+// The on-screen keyboard most recently bound to a text field. Its visibility is
+// the signal for "text entry active": while it is shown the A164 types into the
+// field; when it is hidden the A164's arrow keys navigate the menus instead.
+static lv_obj_t *s_a164_osk = NULL;
+
+// Bind an on-screen keyboard to a text field AND point the physical A164 keyboard
+// at the same field, so typing on either lands in the active input. This wraps
+// every former lv_keyboard_set_textarea() call site.
+static void app_kb_bind(lv_obj_t *kb, lv_obj_t *ta)
+{
+    lv_keyboard_set_textarea(kb, ta);
+    a164_kbd_route_to(ta);
+    s_a164_osk = kb;
+}
+
+// ---- A164 physical-keyboard menu navigation --------------------------------
+// When no on-screen keyboard is active, put the current page's clickable widgets
+// into the A164 keypad group so its arrow keys move focus (with a visible
+// outline) and Enter activates the focused item. An LVGL timer keeps the group
+// pointed at whatever page is currently visible.
+static lv_obj_t *s_a164_nav_page = NULL;
+static lv_style_t s_a164_focus_style;
+
+static void a164_nav_add_focusables(lv_obj_t *cont, lv_group_t *g)
+{
+    uint32_t n = lv_obj_get_child_count(cont);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t *child = lv_obj_get_child(cont, i);
+        if (lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN)) continue;
+        if (lv_obj_has_flag(child, LV_OBJ_FLAG_CLICKABLE)) {
+            lv_group_add_obj(g, child);
+            if (!lv_obj_has_flag(child, LV_OBJ_FLAG_USER_1)) {
+                lv_obj_add_style(child, &s_a164_focus_style, LV_STATE_FOCUSED);
+                lv_obj_add_flag(child, LV_OBJ_FLAG_USER_1);
+            }
+        }
+        a164_nav_add_focusables(child, g); // recurse into nested containers
+    }
+}
+
+static void a164_nav_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    lv_group_t *g = a164_kbd_group();
+    if (!g) return;
+
+    // Text-entry mode while a bound on-screen keyboard is visible.
+    bool typing = (s_a164_osk && lv_obj_is_valid(s_a164_osk) &&
+                   !lv_obj_has_flag(s_a164_osk, LV_OBJ_FLAG_HIDDEN));
+    a164_kbd_set_nav_mode(!typing);
+    if (typing) {
+        s_a164_nav_page = NULL; // force a repopulate once typing ends
+        return;
+    }
+
+    lv_obj_t *page = get_current_ctx()->current_visible_page;
+    if (!page || page == s_a164_nav_page) return; // unchanged since last populate
+
+    lv_group_remove_all_objs(g);
+    a164_nav_add_focusables(page, g);
+    if (lv_group_get_obj_count(g) > 0) {
+        lv_group_focus_obj(lv_group_get_obj_by_index(g, 0));
+    }
+    s_a164_nav_page = page;
+}
+
+static void a164_nav_init(void)
+{
+    lv_style_init(&s_a164_focus_style);
+    lv_style_set_outline_width(&s_a164_focus_style, 2);
+    lv_style_set_outline_color(&s_a164_focus_style, COLOR_LAB5_MAGENTA);
+    lv_style_set_outline_opa(&s_a164_focus_style, LV_OPA_70);
+    lv_style_set_outline_pad(&s_a164_focus_style, 2);
+    lv_timer_create(a164_nav_timer_cb, 150, NULL);
 }
 
 static void save_boot_sound_to_nvs(boot_sound_mode_t mode)
@@ -39607,6 +39972,25 @@ static void theme_dark_mode_switch_cb(lv_event_t *e)
     refresh_theme_visuals(true);
 }
 
+static void theme_orientation_switch_cb(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    bool landscape = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    if (g_landscape_mode == landscape) return;
+
+    // Persist and reboot: the entire UI (including cached, fixed-size tab
+    // containers and lazily-built sub-screens) is laid out for one resolution,
+    // so the clean, low-risk way to swap portrait<->landscape is to save the new
+    // orientation and restart -- app_main then applies the rotation before any
+    // UI is built. A brief (~2s) reboot is the intended behavior here.
+    g_landscape_mode = landscape;
+    save_orientation_to_nvs(g_landscape_mode);
+    ESP_LOGI(TAG, "Orientation changed to %s; rebooting to apply", landscape ? "LANDSCAPE" : "PORTRAIT");
+    lv_refr_now(NULL);
+    vTaskDelay(pdMS_TO_TICKS(150));
+    esp_restart();
+}
+
 // ======================= Time / RTC (RX8130CE) picker =======================
 
 #define RTC_PICKER_YEAR_MIN 2024
@@ -39897,13 +40281,16 @@ static void show_theme_popup(void)
     style_modal_overlay(theme_popup_overlay, dark_mode_enabled ? LV_OPA_50 : LV_OPA_30);
 
     theme_popup_obj = lv_obj_create(theme_popup_overlay);
-    lv_obj_set_size(theme_popup_obj, 430, 430);
+    lv_obj_set_size(theme_popup_obj, 430, 510);
     lv_obj_center(theme_popup_obj);
     style_popup_card(theme_popup_obj, 12, ui_tab_icon_color());
     lv_obj_set_style_pad_all(theme_popup_obj, 18, 0);
     lv_obj_set_flex_flow(theme_popup_obj, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(theme_popup_obj, 14, 0);
-    lv_obj_clear_flag(theme_popup_obj, LV_OBJ_FLAG_SCROLLABLE);
+    // Scrollable (vertical): with the added Landscape row the content can exceed
+    // the card height, so allow scrolling instead of clipping the last row.
+    lv_obj_add_flag(theme_popup_obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(theme_popup_obj, LV_DIR_VER);
 
     lv_obj_t *title = lv_label_create(theme_popup_obj);
     lv_label_set_text(title, "Theme");
@@ -39951,6 +40338,27 @@ static void show_theme_popup(void)
         lv_obj_add_state(dashboard_switch, LV_STATE_CHECKED);
     }
     lv_obj_add_event_cb(dashboard_switch, theme_dashboard_switch_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    lv_obj_t *orient_row = lv_obj_create(theme_popup_obj);
+    lv_obj_set_size(orient_row, lv_pct(100), 56);
+    lv_obj_set_style_bg_opa(orient_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(orient_row, 0, 0);
+    lv_obj_set_style_pad_all(orient_row, 0, 0);
+    lv_obj_set_flex_flow(orient_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(orient_row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(orient_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *orient_row_label = lv_label_create(orient_row);
+    lv_label_set_text(orient_row_label, "Landscape");
+    lv_obj_set_style_text_font(orient_row_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(orient_row_label, ui_text_color(), 0);
+
+    lv_obj_t *orient_switch = lv_switch_create(orient_row);
+    style_theme_switch(orient_switch);
+    if (g_landscape_mode) {
+        lv_obj_add_state(orient_switch, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(orient_switch, theme_orientation_switch_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     lv_obj_t *boot_sound_row = lv_obj_create(theme_popup_obj);
     lv_obj_set_size(boot_sound_row, lv_pct(100), 64);
@@ -41487,7 +41895,7 @@ static void ota_ta_focus_cb(lv_event_t *e)
 {
     lv_obj_t *ta = lv_event_get_target(e);
     if (g_ota.keyboard) {
-        lv_keyboard_set_textarea(g_ota.keyboard, ta);
+        app_kb_bind(g_ota.keyboard, ta);
         lv_obj_clear_flag(g_ota.keyboard, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -42395,7 +42803,8 @@ static void show_settings_page(void)
     lv_obj_set_flex_align(tiles, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(tiles, 20, 0);
     lv_obj_set_style_pad_row(tiles, 20, 0);
-    lv_obj_clear_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(tiles, LV_DIR_VER);
 
     // Scan Setup tile
     create_tile(tiles, LV_SYMBOL_REFRESH, "Scan\nSetup", COLOR_MATERIAL_GREEN, settings_tile_event_cb, "Scan Setup");
@@ -42664,7 +43073,7 @@ static void sd_admin_password_focus_cb(lv_event_t *e)
 {
     tab_context_t *ctx = &internal_ctx;
     if (!ctx || !ctx->sd_admin_keyboard) return;
-    lv_keyboard_set_textarea(ctx->sd_admin_keyboard, ctx->sd_admin_password_input);
+    app_kb_bind(ctx->sd_admin_keyboard, ctx->sd_admin_password_input);
     lv_obj_clear_flag(ctx->sd_admin_keyboard, LV_OBJ_FLAG_HIDDEN);
     (void)e;
 }
@@ -42996,7 +43405,7 @@ static void show_sd_admin_page(void)
     lv_obj_add_flag(ctx->sd_admin_keyboard, LV_OBJ_FLAG_FLOATING);
     lv_obj_align(ctx->sd_admin_keyboard, LV_ALIGN_BOTTOM_MID, 0, -8);
     style_on_screen_keyboard(ctx->sd_admin_keyboard);
-    lv_keyboard_set_textarea(ctx->sd_admin_keyboard, ctx->sd_admin_password_input);
+    app_kb_bind(ctx->sd_admin_keyboard, ctx->sd_admin_password_input);
     lv_obj_add_event_cb(ctx->sd_admin_keyboard, sd_admin_keyboard_cb, LV_EVENT_ALL, NULL);
     lv_obj_add_flag(ctx->sd_admin_keyboard, LV_OBJ_FLAG_HIDDEN);
     ctx->current_visible_page = ctx->sd_admin_page;
@@ -43058,6 +43467,14 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "SD card mounted at %s", CONFIG_BSP_SD_MOUNT_POINT);
     }
+    // Reflect the boot-time mount result on the internal-SD presence flags right
+    // away. Otherwise these are only set later inside check_all_sd_cards(), which
+    // runs behind the USB/board-detection path and can be delayed or skipped if
+    // that path stalls -- leaving a mounted card reported as "No SD card". Both
+    // symbols are file-scope and already initialized (internal_ctx via
+    // init_all_tab_contexts() above); the later stat("/sdcard") refresh agrees.
+    internal_sd_present = (ret == ESP_OK);
+    internal_ctx.sd_card_present = internal_sd_present;
 
     // Enable battery charging
     ESP_LOGI(TAG, "Enabling battery charging...");
@@ -43087,6 +43504,18 @@ void app_main(void)
         return;
     }
 
+    // Apply saved orientation BEFORE any UI is built so every screen lays out
+    // against the correct logical resolution. Software rotation is already
+    // enabled in bsp_display_start() (flags.sw_rotate = true) and its scratch
+    // buffer pre-allocated; LVGL also auto-transforms touch input to match the
+    // rotation (see indev_pointer_proc), so touch needs no extra remap.
+    if (g_landscape_mode) {
+        bsp_display_lock(0);
+        lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90);
+        bsp_display_unlock();
+        ESP_LOGI(TAG, "Display rotated to LANDSCAPE (1280x720)");
+    }
+
     // Paint the base screen dark and flush it *before* the backlight comes on, so
     // the very first visible frame is already dark. Otherwise the default (light)
     // LVGL screen flashes/fills white for a moment before the boot intro appears.
@@ -43095,6 +43524,12 @@ void app_main(void)
     lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_COVER, 0);
     lv_refr_now(disp);
     bsp_display_unlock();
+
+    // Bring up the M5 Tab5 A164 physical keyboard (I2C 0x6D on GPIO0/1). This is
+    // independent of the USB-A host port (MonsterC5 CDC link), so both work at
+    // once. Safe if the keyboard isn't docked -- it hot-detects when connected.
+    a164_keyboard_init(disp);
+    a164_nav_init();  // arrow-key menu navigation for the A164
 
     // Set display brightness from saved setting with gamma correction
     set_brightness_gamma(screen_brightness_setting);
