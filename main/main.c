@@ -6954,7 +6954,9 @@ subghz_tab_state_t *subghz_host_alloc_state(void)
         return NULL;
     }
     st->freq_mhz = 433.92f;
-    st->raw_mode = false;
+    st->raw_mode = true;   /* default to Raw: shows unrecognized remotes (e.g. a
+                            * 315 MHz keyfob) that Decoded mode would hide. Toggle
+                            * to Decoded for known-protocol parsing. */
     return st;
 }
 

@@ -899,6 +899,19 @@ static void freq_decompose(float freq, int digits[5])
     digits[4] = val % 10;
 }
 
+/* One-tap band preset: the chip's user_data holds the frequency * 100. */
+static void on_freq_preset(lv_event_t *e)
+{
+    subghz_tab_state_t *st = (subghz_tab_state_t *)lv_event_get_user_data(e);
+    lv_obj_t *chip = lv_event_get_current_target(e);
+    if (!st || !chip) return;
+    int f100 = (int)(intptr_t)lv_obj_get_user_data(chip);
+    if (f100 <= 0) return;
+    st->freq_mhz = f100 / 100.0f;
+    update_freq_label(st);
+    close_freq_popup(st);
+}
+
 static void on_freq_tap(lv_event_t *e)
 {
     subghz_tab_state_t *st = (subghz_tab_state_t *)lv_event_get_user_data(e);
@@ -920,7 +933,7 @@ static void on_freq_tap(lv_event_t *e)
     st->listen_freq_popup = overlay;
 
     lv_obj_t *popup = lv_obj_create(overlay);
-    lv_obj_set_size(popup, 480, 280);
+    lv_obj_set_size(popup, 480, 344);
     lv_obj_center(popup);
     subghz_style_popup_card(popup, 12, subghz_host_color_pink());
     lv_obj_set_flex_flow(popup, LV_FLEX_FLOW_COLUMN);
@@ -933,6 +946,37 @@ static void on_freq_tap(lv_event_t *e)
     lv_label_set_text(title, "Frequency (MHz)");
     lv_obj_set_style_text_color(title, subghz_host_ui_text(), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_18, 0);
+
+    /* One-tap band presets (315 is the common keyfob band). */
+    lv_obj_t *preset_row = lv_obj_create(popup);
+    lv_obj_set_size(preset_row, lv_pct(100), 42);
+    lv_obj_set_flex_flow(preset_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(preset_row, LV_FLEX_ALIGN_SPACE_EVENLY, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_bg_opa(preset_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(preset_row, 0, 0);
+    lv_obj_set_style_pad_all(preset_row, 0, 0);
+    lv_obj_set_style_pad_gap(preset_row, 6, 0);
+    lv_obj_clear_flag(preset_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    static const struct { const char *lbl; int f100; } k_freq_presets[] = {
+        { "315",    31500 }, { "390", 39000 }, { "433.92", 43392 },
+        { "868",    86835 }, { "915", 91500 },
+    };
+    for (int i = 0; i < 5; i++) {
+        lv_obj_t *chip = lv_btn_create(preset_row);
+        lv_obj_set_size(chip, 84, 40);
+        lv_obj_set_style_bg_color(chip, subghz_host_ui_card(), 0);
+        lv_obj_set_style_bg_color(chip, subghz_host_ui_card_pressed(), LV_STATE_PRESSED);
+        lv_obj_set_style_radius(chip, 8, 0);
+        lv_obj_set_style_pad_all(chip, 0, 0);
+        lv_obj_set_user_data(chip, (void *)(intptr_t)k_freq_presets[i].f100);
+        lv_obj_add_event_cb(chip, on_freq_preset, LV_EVENT_CLICKED, st);
+        lv_obj_t *cl = lv_label_create(chip);
+        lv_label_set_text(cl, k_freq_presets[i].lbl);
+        lv_obj_set_style_text_color(cl, subghz_host_ui_text(), 0);
+        lv_obj_set_style_text_font(cl, &lv_font_montserrat_14, 0);
+        lv_obj_center(cl);
+    }
 
     lv_obj_t *roller_row = lv_obj_create(popup);
     lv_obj_set_size(roller_row, lv_pct(100), 140);
