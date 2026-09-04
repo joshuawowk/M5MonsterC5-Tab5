@@ -35126,9 +35126,14 @@ static void jammer_back_btn_event_cb(lv_event_t *e)
         lv_obj_add_flag(ctx->bt_jammer_page, LV_OBJ_FLAG_HIDDEN);
     }
 
-    if (ctx && ctx->bt_menu_page) {
-        lv_obj_clear_flag(ctx->bt_menu_page, LV_OBJ_FLAG_HIDDEN);
-        ctx->current_visible_page = ctx->bt_menu_page;
+    // The Jammer now lives in the Radios group launched from the home tiles (it
+    // was moved out of the Bluetooth menu), so Back returns to the home tiles --
+    // like the Deauth/Anti-Surv/Sub-GHz pages. Showing bt_menu_page here left the
+    // user on a hidden/blank Bluetooth page, which is why exiting seemed to
+    // require a reset.
+    if (ctx && ctx->tiles) {
+        lv_obj_clear_flag(ctx->tiles, LV_OBJ_FLAG_HIDDEN);
+        ctx->current_visible_page = ctx->tiles;
     }
 }
 
@@ -38019,7 +38024,11 @@ static void detect_boards(void)
     mbus_ctx.janos_board_ready = false;
 
     // Detect each device independently using ping/pong (also snoops JanOS boot banner)
-    grove_detected = ping_uart_direct(UART_NUM, "Grove", &grove_ctx);
+    // Probe USB first -- it's the primary MonsterC5 link. If a non-GPS USB CDC
+    // device is connected, it IS the Monster (possibly still booting), so skip
+    // the Grove and MBus UART probes entirely: each has a 1.5s timeout that was
+    // otherwise burned on every detection cycle when nothing is wired to those
+    // ports -- the bulk of the ~10-15s "No board detected" stall.
     usb_detected = usb_cdc_connected ? ping_usb() : false;  // Must respond to ping, not just be connected
     if (usb_cdc_connected && !usb_detected && usb_debug_logs && !usb_nmea_device_seen && !usb_is_known_gps) {
         usb_log_cdc_state("detect_boards_usb_ping_failed");
@@ -38027,8 +38036,15 @@ static void detect_boards(void)
     if (usb_nmea_device_seen || usb_is_known_gps) {
         ESP_LOGI(TAG, "[USB] GPS accessory detected (NMEA stream)");
     }
+    bool usb_is_monster = usb_cdc_connected && !usb_nmea_device_seen && !usb_is_known_gps;
+    if (usb_is_monster) {
+        grove_detected = false;
+        mbus_detected  = false;
+    } else {
+        grove_detected = ping_uart_direct(UART_NUM, "Grove", &grove_ctx);
+        mbus_detected  = ping_uart(UART2_NUM, "MBus", &mbus_ctx);
+    }
     uart1_detected = (grove_detected || usb_detected);  // For legacy compatibility
-    mbus_detected = ping_uart(UART2_NUM, "MBus", &mbus_ctx);
 
     // Log detection results (ping functions already log success)
     if (grove_detected) {
@@ -38666,7 +38682,7 @@ static void show_no_board_popup(void)
     lv_obj_center(btn_label);
 
     // Start retry timer (1 second interval)
-    board_detect_retry_timer = lv_timer_create(board_detect_retry_cb, 3000, NULL);
+    board_detect_retry_timer = lv_timer_create(board_detect_retry_cb, 1200, NULL);
     ESP_LOGI(TAG, "Started board detection retry timer (3s interval)");
 }
 
