@@ -2361,6 +2361,7 @@ static void settings_back_btn_event_cb(lv_event_t *e);
 static void show_scan_time_popup(void);
 static void show_theme_popup(void);
 static void app_kb_bind(lv_obj_t *kb, lv_obj_t *ta);  // on-screen + A164 physical kb bind
+static void app_kb_submit_bind(lv_obj_t *field, lv_obj_t *action_btn);  // Enter-in-field fires action_btn
 static void style_theme_switch(lv_obj_t *sw);
 static void theme_dark_mode_switch_cb(lv_event_t *e);
 static void theme_boot_sound_dropdown_cb(lv_event_t *e);
@@ -8893,6 +8894,8 @@ static void show_mitm_popup(void)
     lv_obj_set_style_bg_color(ctx->mitm_connect_btn, lv_color_hex(0x2E7D32), LV_STATE_PRESSED);
     lv_obj_set_style_radius(ctx->mitm_connect_btn, 8, 0);
     lv_obj_add_event_cb(ctx->mitm_connect_btn, mitm_connect_and_start_cb, LV_EVENT_CLICKED, NULL);
+    // Enter in the password field fires Connect & Start (A164 physical keyboard).
+    app_kb_submit_bind(ctx->mitm_password_input, ctx->mitm_connect_btn);
 
     lv_obj_t *connect_label = lv_label_create(ctx->mitm_connect_btn);
     lv_label_set_text(connect_label, "Connect & Start");
@@ -11752,6 +11755,8 @@ static void show_arp_poison_page(void)
             lv_obj_set_style_bg_color(arp_connect_btn, COLOR_MATERIAL_GREEN, 0);
             lv_obj_set_style_radius(arp_connect_btn, 8, 0);
             lv_obj_add_event_cb(arp_connect_btn, arp_connect_cb, LV_EVENT_CLICKED, NULL);
+            // Enter in the password field fires Connect (A164 physical keyboard).
+            app_kb_submit_bind(arp_password_input, arp_connect_btn);
 
             lv_obj_t *connect_label = lv_label_create(arp_connect_btn);
             lv_label_set_text(connect_label, "Connect");
@@ -37752,8 +37757,62 @@ static lv_obj_t *s_a164_osk = NULL;
 static void app_kb_bind(lv_obj_t *kb, lv_obj_t *ta)
 {
     lv_keyboard_set_textarea(kb, ta);
-    a164_kbd_route_to(ta);
     s_a164_osk = kb;
+    if (a164_kbd_present()) {
+        // Physical A164 attached: keep the on-screen keyboard hidden and leave
+        // the whole page in the nav group so Tab still cycles through every
+        // widget while a field is active. Route typing into the field by
+        // focusing it *within* the existing group -- but only if it is already a
+        // group member (its page is the populated, visible one), so build-time
+        // binds on not-yet-shown pages don't hijack focus.
+        if (kb && lv_obj_is_valid(kb)) {
+            lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+        }
+        s_a164_ta = ta;
+        lv_group_t *g = a164_kbd_group();
+        if (g && ta && lv_obj_is_valid(ta) && lv_obj_get_group(ta) == g) {
+            lv_group_focus_obj(ta);
+        }
+    } else {
+        // Touch path (no A164): unchanged -- the on-screen keyboard drives input
+        // and the A164 group collapses to just this field.
+        a164_kbd_route_to(ta);
+    }
+}
+
+// Enter/OK (READY) in a text field advances the flow by firing an associated
+// action button, exactly like tapping it; Esc (CANCEL) just leaves the field.
+// Both release the A164 field routing so arrow keys navigate the page again.
+// Generalizes nmap_a164_exit_cb; gated on a164_kbd_present() so the touch path
+// is untouched. Wire with app_kb_submit_bind(field, action_btn).
+static void app_kb_submit_cb(lv_event_t *e)
+{
+    if (!a164_kbd_present()) {
+        return; // touch path: behavior identical to before (no submit-on-Enter)
+    }
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *field = lv_event_get_target(e);
+    lv_obj_t *btn = (lv_obj_t *)lv_event_get_user_data(e);
+
+    // Release the field so the nav timer repopulates the page and resumes nav.
+    if (s_a164_ta == field) {
+        s_a164_ta = NULL;
+    }
+    a164_kbd_route_to(NULL);
+
+    if (code == LV_EVENT_READY && btn && lv_obj_is_valid(btn) &&
+        !lv_obj_has_state(btn, LV_STATE_DISABLED)) {
+        lv_obj_send_event(btn, LV_EVENT_CLICKED, NULL);
+    }
+}
+
+static void app_kb_submit_bind(lv_obj_t *field, lv_obj_t *action_btn)
+{
+    if (!field || !action_btn) {
+        return;
+    }
+    lv_obj_add_event_cb(field, app_kb_submit_cb, LV_EVENT_READY, action_btn);
+    lv_obj_add_event_cb(field, app_kb_submit_cb, LV_EVENT_CANCEL, action_btn);
 }
 
 // ---- A164 physical-keyboard menu navigation --------------------------------
@@ -37787,29 +37846,56 @@ static void a164_nav_timer_cb(lv_timer_t *t)
     lv_group_t *g = a164_kbd_group();
     if (!g) return;
 
-    // Text-entry mode while a bound on-screen keyboard is visible, OR (A164
-    // present) while a routed field is focused with the OSK hidden -- so hiding
-    // the touch keyboard doesn't drop us out of typing and evict the field.
+    // Typing mode: (touch) while a bound on-screen keyboard is visible, OR (A164
+    // present) whenever the focused group object is a textarea. Deriving it from
+    // "focused widget is a text field" is what lets Tab move between fields and
+    // buttons: on a field, arrows are cursor keys and Enter fires its action; on
+    // a button, arrows navigate (NEXT/PREV) and Enter activates it.
     lv_obj_t *foc = lv_group_get_focused(g);
-    bool typing = (s_a164_osk && lv_obj_is_valid(s_a164_osk) &&
-                   !lv_obj_has_flag(s_a164_osk, LV_OBJ_FLAG_HIDDEN))
-                  || (s_a164_ta && lv_obj_is_valid(s_a164_ta) && foc == s_a164_ta &&
-                      lv_obj_check_type(foc, &lv_textarea_class));
-    a164_kbd_set_nav_mode(!typing);
-    if (typing) {
-        s_a164_nav_page = NULL; // force a repopulate once typing ends
+    bool osk_visible = (s_a164_osk && lv_obj_is_valid(s_a164_osk) &&
+                        !lv_obj_has_flag(s_a164_osk, LV_OBJ_FLAG_HIDDEN));
+    bool field_typing = (a164_kbd_present() && foc && lv_obj_is_valid(foc) &&
+                         lv_obj_check_type(foc, &lv_textarea_class));
+    a164_kbd_set_nav_mode(!(osk_visible || field_typing));
+
+    // Touch path (A164 absent): keep the original behavior exactly -- while the
+    // on-screen keyboard is up don't repopulate; force a repopulate once it
+    // hides, focusing the first widget.
+    if (!a164_kbd_present()) {
+        if (osk_visible) {
+            s_a164_nav_page = NULL; // force a repopulate once typing ends
+            return;
+        }
+        lv_obj_t *page = get_current_ctx()->current_visible_page;
+        if (!page || page == s_a164_nav_page) return; // unchanged since last populate
+        lv_group_remove_all_objs(g);
+        a164_nav_add_focusables(page, g);
+        if (lv_group_get_obj_count(g) > 0) {
+            lv_group_focus_obj(lv_group_get_obj_by_index(g, 0));
+        }
+        s_a164_nav_page = page;
         return;
     }
 
+    // A164 present: keep the group populated with the *whole* page so Tab cycles
+    // through every focusable (fields and buttons alike), even while a field is
+    // focused. Repopulate only when the visible page changes or the group was
+    // emptied (e.g. a field released via a164_kbd_route_to(NULL) after Enter/Esc)
+    // -- never on a stable page, so we don't steal focus from an active field.
+    // When repopulating, keep the currently-focused widget if it survives on the
+    // new page; otherwise focus the first one.
     lv_obj_t *page = get_current_ctx()->current_visible_page;
-    if (!page || page == s_a164_nav_page) return; // unchanged since last populate
-
-    lv_group_remove_all_objs(g);
-    a164_nav_add_focusables(page, g);
-    if (lv_group_get_obj_count(g) > 0) {
-        lv_group_focus_obj(lv_group_get_obj_by_index(g, 0));
+    if (page && (page != s_a164_nav_page || lv_group_get_obj_count(g) == 0)) {
+        lv_obj_t *keep = foc;
+        lv_group_remove_all_objs(g);
+        a164_nav_add_focusables(page, g);
+        if (keep && lv_obj_is_valid(keep) && lv_obj_get_group(keep) == g) {
+            lv_group_focus_obj(keep);
+        } else if (lv_group_get_obj_count(g) > 0) {
+            lv_group_focus_obj(lv_group_get_obj_by_index(g, 0));
+        }
+        s_a164_nav_page = page;
     }
-    s_a164_nav_page = page;
 }
 
 static void a164_nav_init(void)
