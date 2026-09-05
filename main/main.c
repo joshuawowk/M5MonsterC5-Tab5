@@ -8664,6 +8664,11 @@ static void mitm_connect_and_start_cb(lv_event_t *e)
                         if (pc == '\n' || pc == '\r') {
                             if (pcap_line_pos > 0) {
                                 pcap_line[pcap_line_pos] = '\0';
+                                // The C5 has no SD, so it streams the pcap to us as [FILEA]
+                                // frames (global header first, then records). Capture them to
+                                // our /sdcard; the "PCAP ... capture started -> /sdcard/..." log
+                                // line is not a frame and still falls through to the filename grab.
+                                if (subghz_host_recv_file_stream(pcap_line)) { pcap_line_pos = 0; continue; }
                                 char *pcap_path = strstr(pcap_line, "/sdcard/");
                                 if (pcap_path) {
                                     char *slash = strrchr(pcap_path, '/');
@@ -24049,6 +24054,13 @@ static void wardrive_monitor_task(void *arg)
                 if (c == '\n' || c == '\r') {
                     if (line_pos > 0) {
                         line_buffer[line_pos] = '\0';
+
+                        // A streamed file (the C5 has no SD) is reassembled and written to
+                        // our /sdcard; its [FILEA]/[FILEX] frame lines are not normal wardrive
+                        // output. The C5 reroutes the wardrive CSV log (w*.log / *_track CSV)
+                        // and the _track KML here. Plain CSV rows (the live BT/Wi-Fi feed) do
+                        // not match a frame prefix, so they fall through to the parser below.
+                        if (subghz_host_recv_file_stream(line_buffer)) { line_pos = 0; continue; }
 
                         // Tab-side GPS read request from remote CLI
                         if (wardrive_is_tab_gps_read_command(line_buffer)) {
