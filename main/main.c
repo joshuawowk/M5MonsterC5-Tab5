@@ -12573,6 +12573,12 @@ static void karma_monitor_task(void *arg)
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "Karma UART: %s", line_buffer);
 
+                        // A handshake pcap captured while sniffing on the Karma screen is
+                        // streamed [PCAPX] (the C5 has no SD). Reassemble + write it here too;
+                        // without this the KARMA sniffer's handshakes fall through to the text
+                        // parsers and are dropped. Non-[PCAPX] lines return false and continue.
+                        if (handshaker_handle_pcap_line(line_buffer)) { line_pos = 0; continue; }
+
                         // A streamed file (the C5 has no SD) is reassembled and written to
                         // our /sdcard; its frame lines are not normal messages. Karma mode
                         // reroutes lab/eviltwin.txt and lab/portals.txt appends here.
