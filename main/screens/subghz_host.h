@@ -282,7 +282,7 @@ void show_subghz_listen_page(void);
 void show_subghz_listen_page_at(float mhz, bool autostart);
 void show_subghz_manage_page(void);
 void show_subghz_jammer_page(void);
-void show_subghz_tesla_page(void);
+void show_ble_detect_page(void);
 void show_subghz_hunter_page(void);
 void show_subghz_hunter_page_resume(void);
 void show_subghz_scanner_page(void);

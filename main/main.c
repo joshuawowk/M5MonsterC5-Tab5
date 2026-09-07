@@ -7688,7 +7688,7 @@ static void main_tile_event_cb(lv_event_t *e)
     } else if (strcmp(tile_name, "Anti-Surv") == 0) {
         show_antisurv_page();
     } else if (strcmp(tile_name, "Detectors") == 0) {
-        show_detectors_popup();
+        show_ble_detect_page();
     } else if (strcmp(tile_name, "Radios") == 0) {
         show_radios_popup();
     } else if (strcmp(tile_name, "IoT") == 0) {

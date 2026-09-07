@@ -11,7 +11,7 @@ idf_component_register(SRCS
                     "screens/subghz_listen_settings_screen.c"
                     "screens/subghz_manage_screen.c"
                     "screens/subghz_jammer_screen.c"
-                    "screens/subghz_tesla_screen.c"
+                    "screens/ble_detect_screen.c"
                     "screens/subghz_hunter_screen.c"
                     "screens/subghz_hunter_settings_screen.c"
                     "screens/subghz_scanner_screen.c"
