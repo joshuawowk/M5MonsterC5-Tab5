@@ -271,6 +271,10 @@ void subghz_host_free_state(subghz_tab_state_t **pstate);
  * Public screen entry points (provided by screens/.c)
  * ---------------------------------------------------------- */
 void show_subghz_page(void);
+/* ported radio-apps screens (Radios submenu) */
+void show_nrf_scanner_page(void);
+void show_subghz_spectrum_page(void);
+void show_nrf_esb_page(void);
 void show_subghz_listen_page(void);
 void show_subghz_listen_page_at(float mhz, bool autostart);
 void show_subghz_manage_page(void);

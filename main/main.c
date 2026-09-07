@@ -7594,6 +7594,9 @@ static void submenu_option_cb(lv_event_t *e)
     else if (strcmp(name, "Anti-Surv") == 0) show_antisurv_page();
     else if (strcmp(name, "Sub-GHz") == 0) show_subghz_page();
     else if (strcmp(name, "Jammer") == 0) show_jammer_page();
+    else if (strcmp(name, "nRF Scan") == 0) show_nrf_scanner_page();
+    else if (strcmp(name, "SG Spectrum") == 0) show_subghz_spectrum_page();
+    else if (strcmp(name, "ESB/MJ") == 0) show_nrf_esb_page();
 }
 
 static void show_group_submenu(const char *title, bool radios)
@@ -7634,6 +7637,9 @@ static void show_group_submenu(const char *title, bool radios)
     if (radios) {
         create_tile(row, LV_SYMBOL_BARS, "Sub-GHz", COLOR_MATERIAL_PINK, submenu_option_cb, "Sub-GHz");
         create_tile(row, LV_SYMBOL_WARNING, "Jammer", COLOR_MATERIAL_RED, submenu_option_cb, "Jammer");
+        create_tile(row, LV_SYMBOL_BARS, "nRF Scan", COLOR_MATERIAL_AMBER, submenu_option_cb, "nRF Scan");
+        create_tile(row, LV_SYMBOL_BARS, "SG\nSpectrum", COLOR_MATERIAL_PINK, submenu_option_cb, "SG Spectrum");
+        create_tile(row, LV_SYMBOL_LIST, "ESB/MJ", COLOR_MATERIAL_AMBER, submenu_option_cb, "ESB/MJ");
     } else {
         create_tile(row, LV_SYMBOL_EYE_OPEN, "Deauth\nDetector", COLOR_MATERIAL_AMBER, submenu_option_cb, "Deauth Detector");
         create_tile(row, LV_SYMBOL_EYE_OPEN, "Anti-Surv", COLOR_MATERIAL_PINK, submenu_option_cb, "Anti-Surv");
