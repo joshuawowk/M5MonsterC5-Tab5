@@ -29,6 +29,12 @@ static volatile bool s_row_dirty = false;
 static volatile float s_peak_f = 0.0f;
 static volatile int  s_peak_rssi = -200;
 static volatile bool s_peak_dirty = false;
+static lv_obj_t   *s_axis = NULL;
+#define SG_AXIS_N 6
+static lv_obj_t   *s_axis_lbl[SG_AXIS_N] = {NULL};
+static volatile float s_spec_lo = 433.0f, s_spec_step = 0.01f;
+static volatile int   s_spec_n = 101;
+static volatile bool  s_axis_dirty = true;
 
 static int hexv(char c){ if(c>='0'&&c<='9')return c-'0'; if(c>='a'&&c<='f')return c-'a'+10; if(c>='A'&&c<='F')return c-'A'+10; return -1; }
 
@@ -39,6 +45,12 @@ static void process_line(const char *line)
     float pk = 0; int pr = -200;
     const char *pp = strstr(p, "peak="); if (pp) sscanf(pp, "peak=%f", &pk);
     const char *rp = strstr(p, "prssi="); if (rp) sscanf(rp, "prssi=%d", &pr);
+    { float flo = 0, fstep = 0; int fn = 0;
+      const char *lp2 = strstr(p, "lo=");   if (lp2) sscanf(lp2, "lo=%f", &flo);
+      const char *sp2 = strstr(p, "step="); if (sp2) sscanf(sp2, "step=%f", &fstep);
+      const char *np2 = strstr(p, "n=");    if (np2) sscanf(np2, "n=%d", &fn);
+      if (fn > 0 && (flo != s_spec_lo || fstep != s_spec_step || fn != s_spec_n)) {
+          s_spec_lo = flo; s_spec_step = fstep; s_spec_n = fn; s_axis_dirty = true; } }
     const char *d = strstr(p, "data=");
     if (!d) return;
     d += 5;
@@ -88,6 +100,16 @@ static void ui_tick(lv_timer_t *t)
         s_peak_dirty = false;
         lv_label_set_text_fmt(s_peak_lbl, "Peak: %.3f MHz  %d dBm", s_peak_f, s_peak_rssi);
     }
+    if (s_axis_dirty) {
+        s_axis_dirty = false;
+        int n = s_spec_n; if (n < 1) n = 1;
+        float lo = s_spec_lo, step = s_spec_step;
+        for (int i = 0; i < SG_AXIS_N; i++) {
+            if (!s_axis_lbl[i]) continue;
+            float fmhz = lo + step * (float)(n - 1) * (float)i / (float)(SG_AXIS_N - 1);
+            lv_label_set_text_fmt(s_axis_lbl[i], "%.2f", fmhz);
+        }
+    }
 }
 
 static void cleanup(void)
@@ -99,6 +121,9 @@ static void cleanup(void)
     radio_wf_free(&s_wf);
     if (s_page) { lv_obj_delete(s_page); s_page = NULL; }
     s_peak_lbl = NULL;
+    s_axis = NULL;
+    for (int i = 0; i < SG_AXIS_N; i++) s_axis_lbl[i] = NULL;
+    s_axis_dirty = true;
 }
 
 static void on_back(lv_event_t *e){ (void)e; cleanup(); subghz_host_show_main_tiles(); }
@@ -190,13 +215,34 @@ void show_subghz_spectrum_page(void)
         lv_obj_center(pl);
     }
 
-    if (!radio_wf_init(&s_wf, s_page, WF_W, WF_H)) ESP_LOGE(TAG, "waterfall alloc failed");
+    lv_display_t *disp = lv_display_get_default();
+    int disp_w = disp ? lv_display_get_horizontal_resolution(disp) : 720;
+    int disp_h = disp ? lv_display_get_vertical_resolution(disp) : 1280;
+    int wf_w = disp_w - 24;  if (wf_w < 200) wf_w = 200;  if (wf_w > 1280) wf_w = 1280;
+    int wf_h = disp_h - 300; if (wf_h < 200) wf_h = 200;
+    if (!radio_wf_init(&s_wf, s_page, wf_w, wf_h)) ESP_LOGE(TAG, "waterfall alloc failed");
+
+    s_axis = lv_obj_create(s_page);
+    lv_obj_set_size(s_axis, wf_w, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(s_axis, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_axis, 0, 0);
+    lv_obj_set_style_pad_all(s_axis, 0, 0);
+    lv_obj_set_flex_flow(s_axis, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(s_axis, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(s_axis, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < SG_AXIS_N; i++) {
+        s_axis_lbl[i] = lv_label_create(s_axis);
+        lv_label_set_text(s_axis_lbl[i], "-");
+        lv_obj_set_style_text_font(s_axis_lbl[i], &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_axis_lbl[i], subghz_host_ui_muted(), 0);
+    }
+    s_axis_dirty = true;
 
     s_tab_id = subghz_host_current_tab();
     s_alive = true;
     s_row_dirty = false; s_peak_dirty = false;
     xTaskCreate(reader_task, "sg_spec_rd", 4096, NULL, 5, &s_task);
-    s_timer = lv_timer_create(ui_tick, 100, NULL);
+    s_timer = lv_timer_create(ui_tick, 200, NULL);
 
     subghz_host_uart_flush_input(s_tab_id);
     subghz_host_uart_send("subghz_spectrum 433.0 434.0 0.01");
