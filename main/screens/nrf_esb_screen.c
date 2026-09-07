@@ -107,7 +107,7 @@ void show_nrf_esb_page(void)
     lv_obj_t *container = subghz_host_current_container();
     if (!container) return;
     subghz_host_hide_all_pages();
-    if (s_page) { lv_obj_delete(s_page); s_page = NULL; }
+    cleanup();   /* tear down any prior instance (timer/task/PSRAM) on re-entry */
 
     s_page = lv_obj_create(container);
     lv_obj_set_size(s_page, lv_pct(100), lv_pct(100));
