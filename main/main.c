@@ -2138,10 +2138,10 @@ static char ap_radar_target_bssid[18] = {0};
 static int ap_radar_target_channel = 0;
 
 // BT nRF24 Jammer
-static const char *k_jam_bands[5] = { "ble", "bt", "wifi", "drone", "all" };
+static const char *k_jam_bands[7] = { "ble", "bt", "wifi", "drone", "all", "ble-adv", "zigbee" };
 static int bt_jammer_band = 0; // default: ble
 static lv_obj_t *bt_jammer_page = NULL;
-static lv_obj_t *bt_jammer_band_btns[5] = {NULL};
+static lv_obj_t *bt_jammer_band_btns[7] = {NULL};
 static lv_obj_t *bt_jammer_big_btn = NULL;
 static lv_obj_t *bt_jammer_big_btn_lbl = NULL;
 static lv_obj_t *bt_jammer_status_lbl = NULL;
@@ -35091,7 +35091,7 @@ static void jammer_style_band_btn(lv_obj_t *btn, bool selected)
 // Set band buttons enabled/disabled (locked while jamming)
 static void jammer_set_bands_enabled(bool enabled)
 {
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
         if (!bt_jammer_band_btns[i]) continue;
         if (enabled) {
             lv_obj_clear_state(bt_jammer_band_btns[i], LV_STATE_DISABLED);
@@ -35255,10 +35255,10 @@ static void jammer_band_event_cb(lv_event_t *e)
     if (ctx && ctx->bt_jamming) return;
 
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    if (idx < 0 || idx >= 5) return;
+    if (idx < 0 || idx >= 7) return;
 
     bt_jammer_band = idx;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
         jammer_style_band_btn(bt_jammer_band_btns[i], i == idx);
     }
 }
@@ -35470,9 +35470,9 @@ static void show_jammer_page(void)
     lv_obj_set_style_pad_column(band_row, 12, 0);
     lv_obj_clear_flag(band_row, LV_OBJ_FLAG_SCROLLABLE);
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
         lv_obj_t *btn = lv_btn_create(band_row);
-        lv_obj_set_size(btn, 110, 56);
+        lv_obj_set_size(btn, 92, 56);
         lv_obj_set_style_radius(btn, 10, 0);
         jammer_style_band_btn(btn, i == bt_jammer_band);
         lv_obj_add_event_cb(btn, jammer_band_event_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i);

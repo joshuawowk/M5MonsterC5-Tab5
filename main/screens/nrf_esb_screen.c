@@ -101,6 +101,7 @@ static void cleanup(void)
 
 static void on_back(lv_event_t *e){ (void)e; cleanup(); subghz_host_show_main_tiles(); }
 static void on_replay(lv_event_t *e){ (void)e; subghz_host_uart_send("nrf_esb_replay"); }
+static void on_inject(lv_event_t *e){ (void)e; subghz_host_uart_send("nrf_mj_inject last Hello"); if (s_status) lv_label_set_text(s_status, "Injected to last device"); }
 
 void show_nrf_esb_page(void)
 {
@@ -145,6 +146,12 @@ void show_nrf_esb_page(void)
     lv_obj_set_style_bg_color(rbtn, subghz_host_color_amber(), 0);
     lv_obj_add_event_cb(rbtn, on_replay, LV_EVENT_CLICKED, NULL);
     lv_obj_t *rl = lv_label_create(rbtn); lv_label_set_text(rl, "Replay last");
+
+    lv_obj_t *ibtn = lv_btn_create(header);
+    lv_obj_set_style_bg_color(ibtn, subghz_host_color_red(), 0);
+    lv_obj_set_style_margin_left(ibtn, 8, 0);
+    lv_obj_add_event_cb(ibtn, on_inject, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *il = lv_label_create(ibtn); lv_label_set_text(il, "Inject");
 
     s_status = lv_label_create(s_page);
     lv_label_set_text(s_status, "Sniffing...");

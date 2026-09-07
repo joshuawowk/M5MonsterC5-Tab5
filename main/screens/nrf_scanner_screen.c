@@ -106,6 +106,24 @@ static void cleanup(void)
 
 static void on_back(lv_event_t *e){ (void)e; cleanup(); subghz_host_show_main_tiles(); }
 
+/* Scan range presets: send stop then re-arm nrf_scan over one channel range. */
+typedef struct { const char *label; const char *args; } nrf_scan_preset_t;
+static const nrf_scan_preset_t k_scan_presets[3] = {
+    { "Full", "0 125" },
+    { "Low",  "0 60" },
+    { "High", "60 125" },
+};
+
+static void on_scan_preset(lv_event_t *e)
+{
+    const char *args = (const char *)lv_event_get_user_data(e);
+    char cmd[48];
+    subghz_host_uart_send("stop");
+    snprintf(cmd, sizeof(cmd), "nrf_scan %s", args);
+    subghz_host_uart_send(cmd);
+    s_peak_ch = -1;
+}
+
 void show_nrf_scanner_page(void)
 {
     lv_obj_t *container = subghz_host_current_container();
@@ -145,6 +163,29 @@ void show_nrf_scanner_page(void)
     lv_label_set_text(s_peak_lbl, "Peak: --");
     lv_obj_set_style_text_font(s_peak_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(s_peak_lbl, subghz_host_ui_muted(), 0);
+
+    /* Scan range preset buttons: Full / Low / High */
+    lv_obj_t *preset_row = lv_obj_create(s_page);
+    lv_obj_set_size(preset_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(preset_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(preset_row, 0, 0);
+    lv_obj_set_style_pad_all(preset_row, 0, 0);
+    lv_obj_set_flex_flow(preset_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(preset_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(preset_row, 8, 0);
+    lv_obj_clear_flag(preset_row, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *pb = lv_btn_create(preset_row);
+        lv_obj_set_size(pb, 96, 44);
+        lv_obj_set_style_radius(pb, 8, 0);
+        lv_obj_set_style_bg_color(pb, subghz_host_color_cyan(), 0);
+        lv_obj_add_event_cb(pb, on_scan_preset, LV_EVENT_CLICKED, (void *)k_scan_presets[i].args);
+        lv_obj_t *pl = lv_label_create(pb);
+        lv_label_set_text(pl, k_scan_presets[i].label);
+        lv_obj_set_style_text_font(pl, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(pl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(pl);
+    }
 
     if (!radio_wf_init(&s_wf, s_page, WF_W, WF_H)) {
         ESP_LOGE(TAG, "waterfall alloc failed");

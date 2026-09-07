@@ -103,6 +103,30 @@ static void cleanup(void)
 
 static void on_back(lv_event_t *e){ (void)e; cleanup(); subghz_host_show_main_tiles(); }
 
+/* ISM band presets: send subghz_stop then re-arm the spectrum sweep for one band. */
+typedef struct { const char *label; const char *args; } spec_band_preset_t;
+static const spec_band_preset_t k_spec_presets[4] = {
+    { "315", "314.0 316.0 0.02" },
+    { "433", "433.0 434.0 0.01" },
+    { "868", "867.5 868.5 0.01" },
+    { "915", "914.0 916.0 0.02" },
+};
+
+static void spectrum_send(const char *args)
+{
+    char cmd[64];
+    subghz_host_uart_send("subghz_stop");
+    snprintf(cmd, sizeof(cmd), "subghz_spectrum %s", args);
+    subghz_host_uart_send(cmd);
+}
+
+static void on_band_preset(lv_event_t *e)
+{
+    const char *args = (const char *)lv_event_get_user_data(e);
+    spectrum_send(args);
+    if (s_peak_lbl) lv_label_set_text_fmt(s_peak_lbl, "Peak: --   (scanning %s MHz)", args);
+}
+
 void show_subghz_spectrum_page(void)
 {
     lv_obj_t *container = subghz_host_current_container();
@@ -142,6 +166,29 @@ void show_subghz_spectrum_page(void)
     lv_label_set_text(s_peak_lbl, "Peak: --   (scanning 433.0-434.0 MHz)");
     lv_obj_set_style_text_font(s_peak_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(s_peak_lbl, subghz_host_ui_muted(), 0);
+
+    /* ISM band preset buttons: 315 / 433 / 868 / 915 MHz */
+    lv_obj_t *preset_row = lv_obj_create(s_page);
+    lv_obj_set_size(preset_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(preset_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(preset_row, 0, 0);
+    lv_obj_set_style_pad_all(preset_row, 0, 0);
+    lv_obj_set_flex_flow(preset_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(preset_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(preset_row, 8, 0);
+    lv_obj_clear_flag(preset_row, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t *pb = lv_btn_create(preset_row);
+        lv_obj_set_size(pb, 84, 44);
+        lv_obj_set_style_radius(pb, 8, 0);
+        lv_obj_set_style_bg_color(pb, subghz_host_color_purple(), 0);
+        lv_obj_add_event_cb(pb, on_band_preset, LV_EVENT_CLICKED, (void *)k_spec_presets[i].args);
+        lv_obj_t *pl = lv_label_create(pb);
+        lv_label_set_text(pl, k_spec_presets[i].label);
+        lv_obj_set_style_text_font(pl, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(pl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(pl);
+    }
 
     if (!radio_wf_init(&s_wf, s_page, WF_W, WF_H)) ESP_LOGE(TAG, "waterfall alloc failed");
 
