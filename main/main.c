@@ -7597,6 +7597,9 @@ static void submenu_option_cb(lv_event_t *e)
     else if (strcmp(name, "nRF Scan") == 0) show_nrf_scanner_page();
     else if (strcmp(name, "SG Spectrum") == 0) show_subghz_spectrum_page();
     else if (strcmp(name, "ESB/MJ") == 0) show_nrf_esb_page();
+    else if (strcmp(name, "Brute") == 0) show_subghz_brute_page();
+    else if (strcmp(name, "Jam Detect") == 0) show_subghz_jamdet_page();
+    else if (strcmp(name, "BLE Spam") == 0) show_ble_spam_page();
 }
 
 static void show_group_submenu(const char *title, bool radios)
@@ -7640,6 +7643,9 @@ static void show_group_submenu(const char *title, bool radios)
         create_tile(row, LV_SYMBOL_BARS, "nRF Scan", COLOR_MATERIAL_AMBER, submenu_option_cb, "nRF Scan");
         create_tile(row, LV_SYMBOL_BARS, "SG\nSpectrum", COLOR_MATERIAL_PINK, submenu_option_cb, "SG Spectrum");
         create_tile(row, LV_SYMBOL_LIST, "ESB/MJ", COLOR_MATERIAL_AMBER, submenu_option_cb, "ESB/MJ");
+        create_tile(row, LV_SYMBOL_UPLOAD, "Brute", COLOR_MATERIAL_PINK, submenu_option_cb, "Brute");
+        create_tile(row, LV_SYMBOL_WARNING, "Jam\nDetect", COLOR_MATERIAL_CYAN, submenu_option_cb, "Jam Detect");
+        create_tile(row, LV_SYMBOL_BLUETOOTH, "BLE\nSpam", COLOR_MATERIAL_PURPLE, submenu_option_cb, "BLE Spam");
     } else {
         create_tile(row, LV_SYMBOL_EYE_OPEN, "Deauth\nDetector", COLOR_MATERIAL_AMBER, submenu_option_cb, "Deauth Detector");
         create_tile(row, LV_SYMBOL_EYE_OPEN, "Anti-Surv", COLOR_MATERIAL_PINK, submenu_option_cb, "Anti-Surv");
