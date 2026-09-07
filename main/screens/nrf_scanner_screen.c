@@ -79,7 +79,7 @@ static void reader_task(void *arg)
 static void ui_tick(lv_timer_t *t)
 {
     (void)t;
-    if (s_row_dirty) {
+    if (s_row_n > 0) {   /* scroll every tick (continuous), like the listen waterfall */
         uint8_t snap[128]; int n;
         portENTER_CRITICAL(&s_lock);
         n = s_row_n; memcpy(snap, s_row, n); s_row_dirty = false;
@@ -195,7 +195,7 @@ void show_nrf_scanner_page(void)
     s_alive = true;
     s_row_dirty = false; s_peak_dirty = false; s_peak_ch = -1;
     xTaskCreate(reader_task, "nrf_scan_rd", 4096, NULL, 5, &s_task);
-    s_timer = lv_timer_create(ui_tick, 80, NULL);
+    s_timer = lv_timer_create(ui_tick, 100, NULL);
 
     subghz_host_uart_flush_input(s_tab_id);
     subghz_host_uart_send("init_nrf24");
