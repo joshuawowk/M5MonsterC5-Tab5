@@ -17,6 +17,7 @@
 #include "freertos/idf_additions.h"
 #include "freertos/timers.h"
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "nvs.h"
@@ -1157,10 +1158,10 @@ typedef enum {
 } transport_kind_t;
 
 // Tab contexts (Grove, USB, MBus, INTERNAL)
-static tab_context_t grove_ctx = {0};
-static tab_context_t usb_ctx = {0};
-static tab_context_t mbus_ctx = {0};
-static tab_context_t internal_ctx = {0};
+EXT_RAM_BSS_ATTR static tab_context_t grove_ctx;
+EXT_RAM_BSS_ATTR static tab_context_t usb_ctx;
+EXT_RAM_BSS_ATTR static tab_context_t mbus_ctx;
+EXT_RAM_BSS_ATTR static tab_context_t internal_ctx;
 
 // Red Team mode - controls visibility of offensive features (declared early for use in all functions)
 static bool enable_red_team = false;  // Default: false (safe mode)
