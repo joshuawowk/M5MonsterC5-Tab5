@@ -27,6 +27,7 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "bsp/m5stack_tab5.h"
+#include "esp_lcd_touch.h"  // touch polling for dimmed-screen wake (screen_touch_is_pressed)
 #include "lvgl.h"
 #if LV_USE_TINY_TTF
 #include "src/libs/tiny_ttf/lv_tiny_ttf.h"
@@ -3697,13 +3698,38 @@ static void sleep_overlay_click_cb(lv_event_t *e)
     wake_screen("touch");
 }
 
+// Poll the touch controller directly for a press. Used to wake a dimmed screen.
+static bool screen_touch_is_pressed(void)
+{
+    esp_lcd_touch_handle_t tp = bsp_display_get_touch_handle();
+    if (tp == NULL) {
+        return false;
+    }
+
+    esp_lcd_touch_point_data_t points[1];
+    uint8_t touch_cnt = 0;
+    if (esp_lcd_touch_read_data(tp) != ESP_OK) {
+        return false;
+    }
+    return esp_lcd_touch_get_data(tp, points, &touch_cnt, 1) == ESP_OK && touch_cnt > 0;
+}
+
 // Screen timeout timer callback - dims screen after inactivity and handles wake
 static void screen_timeout_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
 
-    // If screen is dimmed, touch overlay handles wake via sleep_overlay_click_cb
+    // While dimmed, wake on a tap. The GT911 uses a polling LVGL indev, so its
+    // sleep_overlay catches the tap on its own; but the ST7123 is registered as an
+    // interrupt-driven (event-mode) indev, and its INT does not wake the LVGL read while
+    // the panel is dimmed -- so the overlay click never fires and the screen appears
+    // stuck off. Poll the controller directly here (this timer keeps ticking regardless
+    // of the touch INT), which restores wake for the ST7123 the way the old proximity
+    // poll did, and is harmless on the GT911.
     if (screen_dimmed) {
+        if (screen_touch_is_pressed()) {
+            wake_screen("touch");
+        }
         return;
     }
 
