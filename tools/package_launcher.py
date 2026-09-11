@@ -11,16 +11,30 @@ exactly like the one esptool's ``merge_bin`` produces:
     0x08000  partition-table.bin   (Launcher reads this)
     0x10000  M5MonsterC5-Tab5.bin  (the app)
 
+Two things set it apart from ``M5MonsterC5-Tab5-full.bin``:
+
+* The embedded table has its FAT/SPIFFS/LittleFS rows removed (and its MD5 row
+  re-signed). The Launcher turns every such row into a real data partition, shares it
+  with any other installed app using the same label, and erases it when this app is
+  deleted -- and this firmware mounts none of them. ``--keep-data LABEL`` keeps one.
+* Its file name becomes the app's name on the device: the Launcher lists an SD install
+  under the file stem cut to 20 characters. Hence ``MonsterC5-Tab5.bin``.
+
 This script builds that image and then *validates* it by replicating the exact
 parsing that ``updateFromSD()`` in the Launcher performs, so CI fails loudly
 instead of shipping a binary the Launcher silently rejects.
 
-Reference: https://github.com/joshuawowk/M5StackLauncher
-           src/sd_functions.cpp        :: updateFromSD, measureSdEspImage,
-                                          sdPartitionIsEmpty, boundedSdPartitionPayload
-           src/partition_table_model.* :: launcherPartitionInitDefaultSizes,
-                                          launcherPartitionBoundedPayloadSize
-           include/pre_compiler.h      :: LAUNCHER_DEFAULT_SPIFFS_THRESHOLD
+Reference: https://github.com/bmorcelli/Launcher (upstream of joshuawowk/M5StackLauncher)
+           src/sd_functions.cpp             :: updateFromSD, measureSdEspImage,
+                                               sdPartitionIsEmpty, boundedSdPartitionPayload
+           src/partition_table_model.*      :: launcherPartitionInitDefaultSizes,
+                                               launcherPartitionBoundedPayloadSize,
+                                               launcherPartitionSanitizedAppLabelBase
+           src/partition_install_layout.cpp :: launcherPrepareInstallDataPartitions
+           src/app_registry.cpp             :: launcherAppNameFromFile,
+                                               launcherDeleteAppByLabel
+           include/pre_compiler.h           :: LAUNCHER_DEFAULT_SPIFFS_THRESHOLD
+           support_files/custom_16Mb_p4.csv :: the Launcher's own layout on the Tab5
 
 Fidelity: the sizing constants are board- and runtime-dependent (see the block below)
 and are hardcoded here for the Tab5's 16 MB flash -- re-check them against the Launcher
@@ -31,8 +45,8 @@ here rather than continuing. Both are stricter than the Launcher, which is the r
 bias for a packaging gate.
 
 Usage:
-    tools/package_launcher.py                      # merge from binaries-esp32p4/
-    tools/package_launcher.py --build-dir build    # merge straight from build/
+    tools/package_launcher.py --build-dir build    # merge straight from build/ (local builds)
+    tools/package_launcher.py                      # merge from binaries-esp32p4/ (CI)
     tools/package_launcher.py --check FILE.bin     # validate an existing image
 """
 
@@ -41,20 +55,26 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import string
 import struct
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+MIB = 1024 * 1024
 
 # --- ESP32-P4 flash layout -------------------------------------------------
 BOOTLOADER_OFFSET = 0x2000
 PARTITION_TABLE_OFFSET = 0x8000
-PARTITION_TABLE_SIZE = 0x1000  # LAUNCHER_PARTITION_TABLE_SIZE (partition_table_model.h)
+PARTITION_TABLE_SIZE = 0x1000      # LAUNCHER_PARTITION_TABLE_SIZE (partition_table_model.h)
+PARTITION_TABLE_BIN_SIZE = 0xC00   # MAX_PARTITION_LENGTH (IDF gen_esp32part.py)
 PARTITION_ENTRY_SIZE = 32
+MD5_ENTRY_MAGIC = b"\xeb\xeb"
 DEFAULT_APP_OFFSET = 0x10000
-FLASH_SIZE = 16 * 1024 * 1024
+APP_DESC_OFFSET = 0x20             # esp_app_desc_t, after the image + first segment headers
+APP_DESC_MAGIC = 0xABCD5432
+FLASH_SIZE = 16 * MIB
 
 # --- Launcher constants -----------------------------------------------------
 # LAUNCHER_DEFAULT_SPIFFS_SIZE is set at runtime by launcherPartitionInitDefaultSizes()
@@ -64,14 +84,33 @@ LAUNCHER_DEFAULT_SPIFFS_SIZE = 0x70000
 # LAUNCHER_DEFAULT_SPIFFS_THRESHOLD defaults to 0xC00000 in include/pre_compiler.h;
 # the Tab5 board config does not override it.
 LAUNCHER_DEFAULT_SPIFFS_THRESHOLD = 0xC00000
-LAUNCHER_APP0_SIZE = 0x180000                 # Launcher's own app slot on Tab5
+# launcherPartitionCreateOtaApp() rounds the new app partition up to this.
+LAUNCHER_APP_PARTITION_ALIGNMENT = 0x10000
+# End of the Launcher's own layout on the Tab5 (support_files/custom_16Mb_p4.csv:
+# nvs, otadata, app0 = the Launcher, coredump); installed apps are placed after it.
+LAUNCHER_LAYOUT_END = 0x1A0000
+LAUNCHER_NAME_MAX = 20             # launcherAppNameFromFile()
+LAUNCHER_LABEL_BASE_LEN = 6        # launcherPartitionSanitizedAppLabelBase()
 
 APP_SUBTYPES = (0x00, 0x10, 0x20)  # factory, ota_0, ota_1 -- what updateFromSD accepts
+DATA_FS_SUBTYPES = (0x81, 0x82, 0x83)
 SUBTYPE_NAMES = {0x81: "FAT", 0x82: "SPIFFS", 0x83: "LittleFS"}
 
 
 class PackagingError(RuntimeError):
     pass
+
+
+def align_up(value: int, alignment: int) -> int:
+    return (value + alignment - 1) & ~(alignment - 1)
+
+
+def app_version(data: bytes, offset: int = 0) -> str:
+    """The app's esp_app_desc_t version -- the `git describe` string for IDF builds."""
+    base = offset + APP_DESC_OFFSET
+    if len(data) < base + 0x30 or struct.unpack_from("<I", data, base)[0] != APP_DESC_MAGIC:
+        return "?"
+    return data[base + 0x10:base + 0x30].split(b"\0")[0].decode("ascii", "replace")
 
 
 # ---------------------------------------------------------------- merging --
@@ -111,7 +150,39 @@ def merge_python(parts: list[tuple[int, Path]], out: Path) -> None:
     out.write_bytes(bytes(buf))
 
 
-def merge_image(build_dir: Path, out: Path, app_name: str) -> Path:
+def strip_data_partitions(table: bytes, keep: set[str]) -> tuple[bytes, list[str]]:
+    """Remove FAT/SPIFFS/LittleFS rows from a partition-table.bin.
+
+    Returns the rewritten 0xC00-byte table and the labels removed. The MD5 row is
+    recomputed the way gen_esp32part.py writes it (0xEBEB, 14 x 0xFF, then the MD5 of
+    every entry before it), so the image still boots when flashed directly at 0x0.
+    """
+    entries = []
+    has_md5 = False
+    for base in range(0, len(table) - PARTITION_ENTRY_SIZE + 1, PARTITION_ENTRY_SIZE):
+        raw = table[base:base + PARTITION_ENTRY_SIZE]
+        if raw[:2] == MD5_ENTRY_MAGIC:
+            has_md5 = True
+            break
+        if raw[:2] != b"\xaa\x50":
+            break
+        entries.append(raw)
+
+    kept, dropped = [], []
+    for raw in entries:
+        label = raw[12:28].rstrip(b"\x00").decode("utf-8", "replace")
+        if raw[2] == 0x01 and raw[3] in DATA_FS_SUBTYPES and label not in keep:
+            dropped.append(label)
+        else:
+            kept.append(raw)
+
+    body = b"".join(kept)
+    if has_md5:
+        body += MD5_ENTRY_MAGIC + b"\xff" * 14 + hashlib.md5(body).digest()
+    return body + b"\xff" * (PARTITION_TABLE_BIN_SIZE - len(body)), dropped
+
+
+def merge_image(build_dir: Path, out: Path, app_name: str, keep_data: set[str]) -> Path:
     app = build_dir / app_name
     bootloader = build_dir / "bootloader.bin"
     table = build_dir / "partition-table.bin"
@@ -124,6 +195,15 @@ def merge_image(build_dir: Path, out: Path, app_name: str) -> Path:
     missing = [str(p) for p in (bootloader, table, app) if not p.exists()]
     if missing:
         raise PackagingError("missing build artifact(s):\n  " + "\n  ".join(missing))
+
+    # binaries-esp32p4/ is refreshed by a stamp-gated post-build step, so after an
+    # incremental build it can hold an app several commits older than build/.
+    fresh = REPO_ROOT / "build" / app_name
+    if fresh.exists() and fresh.resolve() != app.resolve():
+        packaged, built = app_version(app.read_bytes()), app_version(fresh.read_bytes())
+        if packaged != built:
+            print(f"  warning: {app} is {packaged} but build/ holds {built}; "
+                  "pass --build-dir build to package the latest build")
 
     parts = [
         (BOOTLOADER_OFFSET, bootloader),
@@ -146,6 +226,13 @@ def merge_image(build_dir: Path, out: Path, app_name: str) -> Path:
     else:
         merge_python(parts, out)
         print("  merged with built-in packer (esptool not found)")
+
+    table_bin, dropped = strip_data_partitions(table.read_bytes(), keep_data)
+    image = bytearray(out.read_bytes())
+    image[PARTITION_TABLE_OFFSET:PARTITION_TABLE_OFFSET + len(table_bin)] = table_bin
+    out.write_bytes(bytes(image))
+    if dropped:
+        print(f"  removed data partition rows from the embedded table: {', '.join(dropped)}")
     return out
 
 
@@ -303,12 +390,37 @@ def plan_install(data: bytes) -> dict:
     return {"entries": entries, "app": app, "data_parts": data_parts}
 
 
+def launcher_identity(file_name: str) -> dict:
+    """What the Launcher calls an app installed from an SD file named `file_name`.
+
+    Display name: launcherAppNameFromFile() -- the stem, trimmed, cut to 20 chars.
+    Partition label: launcherPartitionSanitizedAppLabelBase() -- the first six ASCII
+    letters/digits of that name, lowercased, zero-padded (on a label clash the Launcher
+    keeps five and appends a digit). Menu icon: the name's first five chars, uppercased.
+    """
+    stem = file_name.rsplit("/", 1)[-1]
+    dot = stem.rfind(".")
+    if dot > 0:
+        stem = stem[:dot]
+    stem = stem.strip()
+    name = stem[:LAUNCHER_NAME_MAX]
+
+    label = ""
+    for ch in name:
+        if len(label) >= LAUNCHER_LABEL_BASE_LEN:
+            break
+        ch = ch.lower() if "A" <= ch <= "Z" else ch
+        if ch in string.ascii_lowercase or ch in string.digits:
+            label += ch
+    label = (label or "app").ljust(LAUNCHER_LABEL_BASE_LEN, "0")
+    return {"stem": stem, "name": name, "label": label, "icon": name[:5].upper()}
+
+
 # ------------------------------------------------------------- reporting --
 
-def report(path: Path, plan: dict) -> None:
-    size = path.stat().st_size
+def report(path: Path, data: bytes, plan: dict) -> None:
     app = plan["app"]
-    print(f"\nLauncher install plan for {path.name} ({size:,} bytes)")
+    print(f"\nLauncher install plan for {path.name} ({len(data):,} bytes)")
     print("-" * 64)
     print("  partition table @ 0x8000:")
     for e in plan["entries"]:
@@ -316,8 +428,10 @@ def report(path: Path, plan: dict) -> None:
               f"off=0x{e['offset']:06X} size=0x{e['size']:06X}")
     print(f"\n  app  : '{app['label']}' @ 0x{app['offset']:06X}, "
           f"0x{app['size']:X} ({app['size']:,} B) via {app['how']}")
+    print(f"         version {app_version(data, app['offset'])}")
 
-    total = LAUNCHER_APP0_SIZE + app["size"]
+    app_partition = align_up(app["size"], LAUNCHER_APP_PARTITION_ALIGNMENT)
+    needed = app_partition
     for dp in plan["data_parts"]:
         create = "rest of flash" if dp["create"] is None else f"0x{dp['create']:X}"
         note = "empty (created blank)" if dp["empty"] else f"copy 0x{dp['copy']:X}"
@@ -326,16 +440,30 @@ def report(path: Path, plan: dict) -> None:
             warn = "  <-- SHRUNK from declared size"
         print(f"  data : '{dp['label']}' {dp['kind']:<8s} declared 0x{dp['declared']:X} "
               f"-> create {create}, {note}{warn}")
-        total += dp["create"] or 0
+        needed += dp["create"] or 0
+    if plan["data_parts"]:
+        print("         (the Launcher shares data partitions between apps by label, and "
+              "erases them when this app is deleted)")
+    else:
+        print("  data : none -- the Launcher creates only the app partition")
 
-    print(f"\n  estimated flash used after install: ~{total/1024/1024:.2f} MB "
-          f"(Launcher app0 0x{LAUNCHER_APP0_SIZE:X} + this app + data) of 16 MB")
-    if total > FLASH_SIZE:
-        raise PackagingError("install layout would not fit in 16 MB of flash")
+    ident = launcher_identity(path.name)
+    print(f"\n  name : an SD install is listed as '{ident['name']}' "
+          f"(icon {ident['icon']}, partition label {ident['label']})")
+    if len(ident["stem"]) > LAUNCHER_NAME_MAX:
+        print(f"         warning: '{ident['stem']}' is {len(ident['stem'])} chars; "
+              f"the Launcher cuts names to {LAUNCHER_NAME_MAX}")
+
+    free = FLASH_SIZE - LAUNCHER_LAYOUT_END
+    print(f"\n  flash: needs 0x{needed:X} ({needed / MIB:.2f} MB, app partition "
+          f"0x{app_partition:X}{' + data' if plan['data_parts'] else ''}) of the "
+          f"{free / MIB:.2f} MB free beside a Launcher with no other apps")
+    if needed > free:
+        raise PackagingError("install layout would not fit beside the Launcher in 16 MB of flash")
     print("  OK -- the Launcher's updateFromSD() parser accepts this image.")
 
 
-def write_manifest(out_dir: Path, bin_path: Path, plan: dict, version: str) -> Path:
+def write_manifest(out_dir: Path, bin_path: Path, data: bytes, plan: dict, version: str) -> Path:
     """Record the resolved install layout, modelled on LauncherHub's `install` object.
 
     Documentation/automation aid only -- SD-card and Favorites installs read the
@@ -364,8 +492,9 @@ def write_manifest(out_dir: Path, bin_path: Path, plan: dict, version: str) -> P
         "author": "C5Lab",
         "category": "tab5",
         "version": version,
+        "app_version": app_version(data, app["offset"]),
         "file": bin_path.name,
-        "sha256": hashlib.sha256(bin_path.read_bytes()).hexdigest(),
+        "sha256": hashlib.sha256(data).hexdigest(),
         "install": {
             "app": {"source_offset": app["offset"], "image_size": app["size"]},
             "partitions": partitions,
@@ -397,8 +526,11 @@ def main() -> int:
                          "(default: binaries-esp32p4/, also accepts build/)")
     ap.add_argument("--out-dir", type=Path, default=REPO_ROOT / "binaries-esp32p4")
     ap.add_argument("--app-name", default="M5MonsterC5-Tab5.bin")
-    ap.add_argument("--name", default="M5MonsterC5-Tab5-launcher.bin",
-                    help="output filename dropped on the SD card")
+    ap.add_argument("--name", default="MonsterC5-Tab5.bin",
+                    help="output file name; its stem is the app's name in the Launcher, "
+                         f"so keep it to {LAUNCHER_NAME_MAX} chars")
+    ap.add_argument("--keep-data", action="append", default=[], metavar="LABEL",
+                    help="keep this FAT/SPIFFS/LittleFS row in the embedded table (repeatable)")
     ap.add_argument("--version", default=None)
     ap.add_argument("--check", type=Path, metavar="BIN",
                     help="only validate an existing image, don't merge")
@@ -413,17 +545,21 @@ def main() -> int:
             args.out_dir.mkdir(parents=True, exist_ok=True)
             target = args.out_dir / args.name
             print(f"Merging Launcher image from {args.build_dir}")
-            merge_image(args.build_dir, target, args.app_name)
+            merge_image(args.build_dir, target, args.app_name, set(args.keep_data))
 
         data = target.read_bytes()
         plan = plan_install(data)
-        report(target, plan)
+        report(target, data, plan)
+
+        unmatched = set(args.keep_data) - {dp["label"] for dp in plan["data_parts"]}
+        for label in sorted(unmatched):
+            print(f"  warning: --keep-data {label}: no such data partition in the table")
 
         if not args.check:
             version = args.version or project_version()
             digest = hashlib.sha256(data).hexdigest()
             (target.with_suffix(".bin.sha256")).write_text(f"{digest}  {target.name}\n")
-            manifest = write_manifest(args.out_dir, target, plan, version)
+            manifest = write_manifest(args.out_dir, target, data, plan, version)
             print(f"\n  -> {target}")
             print(f"  -> {target.with_suffix('.bin.sha256')}")
             print(f"  -> {manifest}")
