@@ -10386,6 +10386,12 @@ static void mitm_popup_close_cb(lv_event_t *e)
 
     tab_context_t *ctx = get_current_ctx();
     if (ctx && ctx->mitm_popup_overlay) {
+        // Release the A164 group if this field held it, so the nav timer
+        // repopulates the underlying page once the popup is gone.
+        if (s_a164_ta == ctx->mitm_password_input) {
+            s_a164_ta = NULL;
+            a164_kbd_route_to(NULL);
+        }
         lv_obj_del(ctx->mitm_popup_overlay);
         ctx->mitm_popup_overlay = NULL;
         ctx->mitm_popup = NULL;
@@ -10415,10 +10421,26 @@ static void mitm_keyboard_cb(lv_event_t *e)
 static void mitm_password_input_cb(lv_event_t *e)
 {
     tab_context_t *ctx = get_current_ctx();
-    if (ctx && lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
+    if (!ctx) return;
+    if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
         ctx->mitm_use_saved_password = false;
     }
-    if (ctx && ctx->mitm_keyboard) {
+    if (!ctx->mitm_password_input) return;
+
+    if (a164_kbd_present()) {
+        // Physical A164 attached: this popup is an overlay, not
+        // current_visible_page, so the nav timer never adds its field to the
+        // A164 group -- app_kb_bind()'s "focus only if already in group" then
+        // silently no-ops and the field takes neither touch nor key input.
+        // Point the A164 straight at the field instead (same effect as tapping a
+        // field on a real page), and keep the on-screen keyboard hidden.
+        if (ctx->mitm_keyboard) {
+            lv_obj_add_flag(ctx->mitm_keyboard, LV_OBJ_FLAG_HIDDEN);
+        }
+        s_a164_ta = ctx->mitm_password_input;
+        a164_kbd_route_to(ctx->mitm_password_input);
+    } else if (ctx->mitm_keyboard) {
+        // Touch only: drive input from the on-screen keyboard.
         lv_obj_clear_flag(ctx->mitm_keyboard, LV_OBJ_FLAG_HIDDEN);
         app_kb_bind(ctx->mitm_keyboard, ctx->mitm_password_input);
     }
@@ -14513,6 +14535,12 @@ static void arp_poison_back_cb(lv_event_t *e)
     arp_auto_mode = false;
 
     if (arp_poison_page) {
+        // Release the A164 group if the password field held it (see
+        // arp_password_input_cb) before the field is destroyed.
+        if (s_a164_ta == arp_password_input) {
+            s_a164_ta = NULL;
+            a164_kbd_route_to(NULL);
+        }
         lv_obj_del(arp_poison_page);
         arp_poison_page = NULL;
         if (ctx) {
@@ -14565,7 +14593,15 @@ static void arp_keyboard_cb(lv_event_t *e)
 static void arp_password_input_cb(lv_event_t *e)
 {
     (void)e;
-    if (arp_keyboard) {
+    if (!arp_password_input) return;
+    if (a164_kbd_present()) {
+        // Same overlay-vs-nav-group gap as the MITM popup (see
+        // mitm_password_input_cb): this page is never current_visible_page, so
+        // route the A164 straight at the field instead of relying on app_kb_bind.
+        if (arp_keyboard) lv_obj_add_flag(arp_keyboard, LV_OBJ_FLAG_HIDDEN);
+        s_a164_ta = arp_password_input;
+        a164_kbd_route_to(arp_password_input);
+    } else if (arp_keyboard) {
         lv_obj_clear_flag(arp_keyboard, LV_OBJ_FLAG_HIDDEN);
         app_kb_bind(arp_keyboard, arp_password_input);
     }
