@@ -15610,12 +15610,21 @@ static void nmap_scan_task_fn(void *arg)
     nmap_host_t *results = nmap_hosts_data;
     int result_count = 0;
 
-    int timeout_ms = 300000;
-    int elapsed_ms = 0;
+    // Time out on silence, not on total scan time: an "all hosts" scan of a busy
+    // /24 can legitimately run for many minutes, but JanOS emits a progress line
+    // at least every ~1.5 s while scanning ports (every ~8 s during host
+    // discovery). Reset the stall counter whenever bytes arrive so we only bail
+    // when the board has genuinely gone quiet (crash/hang), while a large but
+    // healthy scan runs to completion. A generous absolute cap is the backstop.
+    const int stall_timeout_ms = 45000;    // no RX for this long -> assume stalled
+    const int abs_timeout_ms   = 1800000;  // 30 min hard backstop
+    int elapsed_ms = 0;   // silence accumulator, reset on any RX
+    int total_ms   = 0;   // absolute-cap accumulator
 
-    while (nmap_scanning && elapsed_ms < timeout_ms) {
+    while (nmap_scanning && elapsed_ms < stall_timeout_ms && total_ms < abs_timeout_ms) {
         int len = transport_read_bytes(uart_port, rx_buffer, sizeof(rx_buffer) - 1, pdMS_TO_TICKS(200));
         if (len > 0) {
+            elapsed_ms = 0;
             rx_buffer[len] = '\0';
 
             for (int i = 0; i < len && nmap_scanning; i++) {
@@ -15779,13 +15788,15 @@ static void nmap_scan_task_fn(void *arg)
             }
         }
         elapsed_ms += 200;
+        total_ms   += 200;
     }
 
     if (nmap_scanning) {
         nmap_scanning = false;
         if (bsp_display_lock(0)) {
             if (ctx && ctx->nmap_progress_label) {
-                lv_label_set_text(ctx->nmap_progress_label, "Scan timed out");
+                lv_label_set_text(ctx->nmap_progress_label,
+                    total_ms >= abs_timeout_ms ? "Scan timed out" : "Scan stalled (no response)");
                 lv_obj_set_style_text_color(ctx->nmap_progress_label, COLOR_MATERIAL_RED, 0);
             }
             bsp_display_unlock();
