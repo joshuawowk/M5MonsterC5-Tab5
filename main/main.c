@@ -94,7 +94,11 @@ extern void pthread_internal_local_storage_destructor_callback(TaskHandle_t hand
 
 
 #define JANOS_TAB_VERSION "1.5.4"
-#define JANOS_VERSION_REQUIRED "1.7.4"
+// Minimum companion JanOS this app is built against. A board on this version or
+// newer is compatible; older raises the version-mismatch warning. Compared with
+// janos_version_is_compatible() (semver), not an exact string match, so a board
+// running a newer JanOS is not flagged.
+#define JANOS_VERSION_REQUIRED "1.7.1"
 
 #include "lwip/netdb.h"
 #include <dirent.h>
@@ -52934,6 +52938,23 @@ static void check_all_subghz_status(void)
 //  3. Older firmware replies with "Unrecognized command" and never reprints
 //     the version. We only fall back to "<1.5.8" if we did NOT manage to
 //     snoop the version at boot - so we never overwrite a known-good version.
+// True when a detected JanOS version string is at least JANOS_VERSION_REQUIRED,
+// using a numeric MAJOR.MINOR.PATCH compare so a *newer* board is accepted (the
+// old exact strcmp flagged every non-matching version, including newer ones).
+// An empty or unparseable version is treated as incompatible so a genuinely
+// unknown board still warns.
+static bool janos_version_is_compatible(const char *ver)
+{
+    if (!ver || ver[0] == '\0') return false;
+    while (*ver == 'v' || *ver == 'V') ver++;
+    int a = 0, b = 0, c = 0, ra = 0, rb = 0, rc = 0;
+    if (sscanf(ver, "%d.%d.%d", &a, &b, &c) < 2) return false;
+    sscanf(JANOS_VERSION_REQUIRED, "%d.%d.%d", &ra, &rb, &rc);
+    if (a != ra) return a > ra;
+    if (b != rb) return b > rb;
+    return c >= rc;
+}
+
 static void check_version_for_tab(tab_id_t tab)
 {
     if (tab == TAB_INTERNAL) return;
@@ -52946,7 +52967,7 @@ static void check_version_for_tab(tab_id_t tab)
 
     // Fast path: boot-banner snoop during ping already captured the version.
     if (ctx->janos_version[0] != '\0') {
-        ctx->janos_version_mismatch = (strcmp(ctx->janos_version, JANOS_VERSION_REQUIRED) != 0);
+        ctx->janos_version_mismatch = !janos_version_is_compatible(ctx->janos_version);
         ESP_LOGI(TAG, "[%s] JanOS version (from boot snoop): %s (mismatch=%d, rf=%s)",
                  tab_name, ctx->janos_version, ctx->janos_version_mismatch,
                  ctx->janos_rf_version[0] ? ctx->janos_rf_version : "n/a");
@@ -53005,7 +53026,7 @@ static void check_version_for_tab(tab_id_t tab)
     if (tab == TAB_USB) usb_rx_exclusive = false;
 
     if (ctx->janos_version[0] != '\0') {
-        ctx->janos_version_mismatch = (strcmp(ctx->janos_version, JANOS_VERSION_REQUIRED) != 0);
+        ctx->janos_version_mismatch = !janos_version_is_compatible(ctx->janos_version);
         ESP_LOGI(TAG, "[%s] JanOS version: %s (mismatch=%d, rf=%s)",
                  tab_name, ctx->janos_version, ctx->janos_version_mismatch,
                  ctx->janos_rf_version[0] ? ctx->janos_rf_version : "n/a");
@@ -56267,7 +56288,7 @@ static void ota_info_sync_running_context(const ota_slot_info_t *slot)
         if (short_ver[0]) {
             strncpy(tctx->janos_version, short_ver, sizeof(tctx->janos_version) - 1);
             tctx->janos_version[sizeof(tctx->janos_version) - 1] = '\0';
-            tctx->janos_version_mismatch = (strcmp(tctx->janos_version, JANOS_VERSION_REQUIRED) != 0);
+            tctx->janos_version_mismatch = !janos_version_is_compatible(tctx->janos_version);
         }
     }
     if (slot->build[0]) {
