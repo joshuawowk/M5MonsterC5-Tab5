@@ -308,6 +308,25 @@ static void on_back(lv_event_t *e)
     show_subghz_page();
 }
 
+static void jammer_start_special(subghz_tab_state_t *st, const char *cmd, const char *status)
+{
+    if (!st) return;
+    st->jamming = true;
+    st->jammer_radio_fail_pending = false;
+    st->jammer_active_pending = false;
+    subghz_host_uart_send(cmd);
+    if (st->jammer_status_lbl) {
+        lv_label_set_text(st->jammer_status_lbl, status);
+        lv_obj_set_style_text_color(st->jammer_status_lbl, subghz_host_color_red(), 0);
+    }
+    if (st->jammer_big_btn)
+        lv_obj_set_style_bg_color(st->jammer_big_btn, lv_color_hex(0x8B0000), 0);
+    if (st->jammer_big_btn_lbl)
+        lv_label_set_text(st->jammer_big_btn_lbl, LV_SYMBOL_STOP " STOP");
+}
+static void on_sweep_btn(lv_event_t *e) { (void)e; jammer_start_special(subghz_host_state(), "subghz_jam_sweep", "Sweeping 300-348 MHz..."); }
+static void on_keyfob_btn(lv_event_t *e) { (void)e; jammer_start_special(subghz_host_state(), "subghz_jam_keyfob", "Keyfob hopping..."); }
+
 void show_subghz_jammer_page(void)
 {
     subghz_tab_state_t *st = subghz_host_state();
@@ -369,6 +388,25 @@ void show_subghz_jammer_page(void)
     lv_obj_set_style_text_font(st->jammer_status_lbl, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(st->jammer_status_lbl, subghz_host_ui_muted(), 0);
     lv_label_set_text(st->jammer_status_lbl, "Idle");
+
+    /* Sweep / Keyfob one-tap sub-GHz jammers (share the big STOP button) */
+    lv_obj_t *sk_row = lv_obj_create(st->jammer_page);
+    lv_obj_set_size(sk_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(sk_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(sk_row, 0, 0);
+    lv_obj_set_style_pad_column(sk_row, 12, 0);
+    lv_obj_set_flex_flow(sk_row, LV_FLEX_FLOW_ROW);
+    lv_obj_clear_flag(sk_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t *sw = lv_btn_create(sk_row);
+    lv_obj_set_size(sw, 180, 60); lv_obj_set_style_radius(sw, 12, 0);
+    lv_obj_set_style_bg_color(sw, subghz_host_color_amber(), 0);
+    lv_obj_add_event_cb(sw, on_sweep_btn, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *swl = lv_label_create(sw); lv_label_set_text(swl, "Band Sweep"); lv_obj_center(swl);
+    lv_obj_t *kf = lv_btn_create(sk_row);
+    lv_obj_set_size(kf, 180, 60); lv_obj_set_style_radius(kf, 12, 0);
+    lv_obj_set_style_bg_color(kf, subghz_host_color_amber(), 0);
+    lv_obj_add_event_cb(kf, on_keyfob_btn, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *kfl = lv_label_create(kf); lv_label_set_text(kfl, "Keyfob Hop"); lv_obj_center(kfl);
 
     /* Background reader (catches CC1101 missing / jam active) + UI timer. */
     st->jammer_task_tab_id = subghz_host_current_tab();

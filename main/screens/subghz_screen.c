@@ -294,7 +294,6 @@ static void on_listen(lv_event_t *e)   { (void)e; ESP_LOGI(TAG, "Listen");     s
 static void on_manage(lv_event_t *e)   { (void)e; ESP_LOGI(TAG, "SD Signals"); show_subghz_manage_page(); }
 static void on_weather(lv_event_t *e)  { (void)e; ESP_LOGI(TAG, "Weather");    show_subghz_weather_page(); }
 static void on_jammer(lv_event_t *e)   { (void)e; ESP_LOGI(TAG, "Jammer");     show_subghz_jammer_page(); }
-static void on_tesla(lv_event_t *e)    { (void)e; ESP_LOGI(TAG, "Tesla");      show_subghz_tesla_page(); }
 static void on_settings(lv_event_t *e) { (void)e; ESP_LOGI(TAG, "Settings");   show_subghz_settings_page(); }
 
 /* ---------- Public entry ------------------------------------------- */
@@ -372,7 +371,6 @@ void show_subghz_page(void)
     subghz_create_tile(tiles, LV_SYMBOL_LIST,     "SD Signals", subghz_host_color_orange(), on_manage);
     subghz_create_tile(tiles, LV_SYMBOL_TINT,     "Weather",    subghz_host_color_blue(),   on_weather);
     subghz_create_tile(tiles, LV_SYMBOL_WARNING,  "Jammer",     subghz_host_color_red(),    on_jammer);
-    subghz_create_tile(tiles, LV_SYMBOL_POWER,    "Tesla",      subghz_host_color_purple(), on_tesla);
     subghz_create_tile(tiles, LV_SYMBOL_SETTINGS, "Settings",   subghz_host_ui_muted(),     on_settings);
 
     /* Learn CC1101 presence in the background so each tool's header badge

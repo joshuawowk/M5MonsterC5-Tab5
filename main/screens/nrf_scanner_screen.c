@@ -1,0 +1,245 @@
+/* nRF24 2.4 GHz scanner / spectrum analyzer screen. Sends init_nrf24 + nrf_scan
+ * and paints [NRF_SPECTRUM] data=<hex> rows into a scrolling spectrogram, with a
+ * live peak-channel readout. Reachable from the Radios submenu. */
+#include "subghz_host.h"
+#include "radio_waterfall.h"
+#include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <string.h>
+#include <stdio.h>
+
+static const char *TAG = "nrf_scanner";
+#define RXBUF 1024
+#define LINEBUF 1024
+#define WF_W 680
+#define WF_H 250
+
+static lv_obj_t   *s_page = NULL;
+static lv_obj_t   *s_peak_lbl = NULL;
+static lv_timer_t *s_timer = NULL;
+static TaskHandle_t s_task = NULL;
+static volatile bool s_alive = false;
+static int s_tab_id = 0;
+static radio_wf_t s_wf;
+static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t s_row[128];
+static volatile int  s_row_n = 0;
+static volatile bool s_row_dirty = false;
+static volatile int  s_peak_ch = -1, s_peak_mhz = 0, s_peak_pct = 0;
+static volatile bool s_peak_dirty = false;
+static lv_obj_t   *s_axis = NULL;
+#define NRF_AXIS_N 7
+static lv_obj_t   *s_axis_lbl[NRF_AXIS_N] = {NULL};
+static volatile int  s_scan_lo = 0, s_scan_span = 126;
+static volatile bool s_axis_dirty = true;
+
+static int hexv(char c){ if(c>='0'&&c<='9')return c-'0'; if(c>='a'&&c<='f')return c-'a'+10; if(c>='A'&&c<='F')return c-'A'+10; return -1; }
+
+static void process_line(const char *line)
+{
+    const char *p;
+    if ((p = strstr(line, "[NRF_SCAN_TOP] "))) {
+        int ch=-1, mhz=0, pct=0;
+        sscanf(p, "[NRF_SCAN_TOP] ch=%d mhz=%d pct=%d", &ch, &mhz, &pct);
+        s_peak_ch = ch; s_peak_mhz = mhz; s_peak_pct = pct; s_peak_dirty = true;
+        return;
+    }
+    if ((p = strstr(line, "[NRF_SPECTRUM] "))) {
+        int flo = 0, fn = 0;
+        sscanf(p, "[NRF_SPECTRUM] lo=%d n=%d", &flo, &fn);
+        if (fn > 0 && (flo != s_scan_lo || fn != s_scan_span)) { s_scan_lo = flo; s_scan_span = fn; s_axis_dirty = true; }
+        const char *d = strstr(p, "data=");
+        if (!d) return;
+        d += 5;
+        portENTER_CRITICAL(&s_lock);
+        int n = 0;
+        while (n < 128) {
+            int hi = hexv(d[0]); if (hi < 0) break;
+            int lo = hexv(d[1]); if (lo < 0) break;
+            s_row[n++] = (uint8_t)((hi << 4) | lo); d += 2;
+        }
+        s_row_n = n; s_row_dirty = true;
+        portEXIT_CRITICAL(&s_lock);
+    }
+}
+
+static void reader_task(void *arg)
+{
+    (void)arg;
+    static char rx[RXBUF], line[LINEBUF];
+    int lp = 0;
+    while (s_alive) {
+        int len = subghz_host_uart_read_bytes(s_tab_id, rx, sizeof(rx) - 1, pdMS_TO_TICKS(100));
+        if (len <= 0) { vTaskDelay(pdMS_TO_TICKS(20)); continue; }
+        rx[len] = '\0';
+        for (int i = 0; i < len; i++) {
+            char c = rx[i];
+            if (c == '\n' || c == '\r') {
+                if (lp > 0) { line[lp] = '\0'; process_line(line); lp = 0; }
+            } else if (lp < LINEBUF - 1) line[lp++] = c;
+        }
+    }
+    s_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void ui_tick(lv_timer_t *t)
+{
+    (void)t;
+    if (s_row_n > 0) {   /* scroll every tick (continuous), like the listen waterfall */
+        uint8_t snap[128]; int n;
+        portENTER_CRITICAL(&s_lock);
+        n = s_row_n; memcpy(snap, s_row, n); s_row_dirty = false;
+        portEXIT_CRITICAL(&s_lock);
+        radio_wf_push(&s_wf, snap, n);
+    }
+    if (s_peak_dirty && s_peak_lbl) {
+        s_peak_dirty = false;
+        if (s_peak_ch >= 0)
+            lv_label_set_text_fmt(s_peak_lbl, "Peak: ch %d  (%d MHz)  %d%%", s_peak_ch, s_peak_mhz, s_peak_pct);
+    }
+    if (s_axis_dirty) {
+        s_axis_dirty = false;
+        int lo = s_scan_lo, span = s_scan_span; if (span < 1) span = 1;
+        for (int i = 0; i < NRF_AXIS_N; i++) {
+            if (!s_axis_lbl[i]) continue;
+            int mhz = 2400 + lo + (int)((long)(span - 1) * i / (NRF_AXIS_N - 1));
+            lv_label_set_text_fmt(s_axis_lbl[i], "%d", mhz);
+        }
+    }
+}
+
+static void cleanup(void)
+{
+    if (s_alive) subghz_host_uart_send("stop");
+    s_alive = false;
+    for (int i = 0; i < 25 && s_task; i++) vTaskDelay(pdMS_TO_TICKS(20));
+    if (s_timer) { lv_timer_delete(s_timer); s_timer = NULL; }
+    radio_wf_free(&s_wf);
+    if (s_page) { lv_obj_delete(s_page); s_page = NULL; }
+    s_peak_lbl = NULL;
+    s_axis = NULL;
+    for (int i = 0; i < NRF_AXIS_N; i++) s_axis_lbl[i] = NULL;
+    s_axis_dirty = true;
+}
+
+static void on_back(lv_event_t *e){ (void)e; cleanup(); subghz_host_show_main_tiles(); }
+
+/* Scan range presets: send stop then re-arm nrf_scan over one channel range. */
+typedef struct { const char *label; const char *args; } nrf_scan_preset_t;
+static const nrf_scan_preset_t k_scan_presets[3] = {
+    { "Full", "0 125" },
+    { "Low",  "0 60" },
+    { "High", "60 125" },
+};
+
+static void on_scan_preset(lv_event_t *e)
+{
+    const char *args = (const char *)lv_event_get_user_data(e);
+    char cmd[48];
+    subghz_host_uart_send("stop");
+    snprintf(cmd, sizeof(cmd), "nrf_scan %s", args);
+    subghz_host_uart_send(cmd);
+    s_peak_ch = -1;
+}
+
+void show_nrf_scanner_page(void)
+{
+    lv_obj_t *container = subghz_host_current_container();
+    if (!container) return;
+    subghz_host_hide_all_pages();
+    cleanup();   /* tear down any prior instance (timer/task/PSRAM) on re-entry */
+
+    s_page = lv_obj_create(container);
+    lv_obj_set_size(s_page, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(s_page, subghz_host_ui_bg(), 0);
+    lv_obj_set_style_border_width(s_page, 0, 0);
+    lv_obj_set_style_pad_all(s_page, 10, 0);
+    lv_obj_set_flex_flow(s_page, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s_page, 8, 0);
+    lv_obj_clear_flag(s_page, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *header = lv_obj_create(s_page);
+    lv_obj_set_size(header, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(header, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(header, 0, 0);
+    lv_obj_set_style_pad_all(header, 4, 0);
+    lv_obj_set_flex_flow(header, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(header, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *back = lv_btn_create(header);
+    lv_obj_set_style_bg_color(back, subghz_host_ui_card(), 0);
+    lv_obj_add_event_cb(back, on_back, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *bl = lv_label_create(back); lv_label_set_text(bl, LV_SYMBOL_LEFT);
+
+    lv_obj_t *title = lv_label_create(header);
+    lv_label_set_text(title, "  nRF24 2.4 GHz Scanner");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_color(title, subghz_host_color_cyan(), 0);
+
+    s_peak_lbl = lv_label_create(s_page);
+    lv_label_set_text(s_peak_lbl, "Peak: --");
+    lv_obj_set_style_text_font(s_peak_lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(s_peak_lbl, subghz_host_ui_muted(), 0);
+
+    /* Scan range preset buttons: Full / Low / High */
+    lv_obj_t *preset_row = lv_obj_create(s_page);
+    lv_obj_set_size(preset_row, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(preset_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(preset_row, 0, 0);
+    lv_obj_set_style_pad_all(preset_row, 0, 0);
+    lv_obj_set_flex_flow(preset_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(preset_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(preset_row, 8, 0);
+    lv_obj_clear_flag(preset_row, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *pb = lv_btn_create(preset_row);
+        lv_obj_set_size(pb, 96, 44);
+        lv_obj_set_style_radius(pb, 8, 0);
+        lv_obj_set_style_bg_color(pb, subghz_host_color_cyan(), 0);
+        lv_obj_add_event_cb(pb, on_scan_preset, LV_EVENT_CLICKED, (void *)k_scan_presets[i].args);
+        lv_obj_t *pl = lv_label_create(pb);
+        lv_label_set_text(pl, k_scan_presets[i].label);
+        lv_obj_set_style_text_font(pl, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(pl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(pl);
+    }
+
+    lv_display_t *disp = lv_display_get_default();
+    int disp_w = disp ? lv_display_get_horizontal_resolution(disp) : 720;
+    int disp_h = disp ? lv_display_get_vertical_resolution(disp) : 1280;
+    int wf_w = disp_w - 24;  if (wf_w < 200) wf_w = 200;  if (wf_w > 1280) wf_w = 1280;
+    int wf_h = disp_h - 300; if (wf_h < 200) wf_h = 200;
+    if (!radio_wf_init(&s_wf, s_page, wf_w, wf_h)) {
+        ESP_LOGE(TAG, "waterfall alloc failed");
+    }
+
+    s_axis = lv_obj_create(s_page);
+    lv_obj_set_size(s_axis, wf_w, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(s_axis, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_axis, 0, 0);
+    lv_obj_set_style_pad_all(s_axis, 0, 0);
+    lv_obj_set_flex_flow(s_axis, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(s_axis, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(s_axis, LV_OBJ_FLAG_SCROLLABLE);
+    for (int i = 0; i < NRF_AXIS_N; i++) {
+        s_axis_lbl[i] = lv_label_create(s_axis);
+        lv_label_set_text(s_axis_lbl[i], "-");
+        lv_obj_set_style_text_font(s_axis_lbl[i], &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(s_axis_lbl[i], subghz_host_ui_muted(), 0);
+    }
+    s_axis_dirty = true;
+
+    s_tab_id = subghz_host_current_tab();
+    s_alive = true;
+    s_row_dirty = false; s_peak_dirty = false; s_peak_ch = -1;
+    xTaskCreate(reader_task, "nrf_scan_rd", 4096, NULL, 5, &s_task);
+    s_timer = lv_timer_create(ui_tick, 200, NULL);
+
+    subghz_host_uart_flush_input(s_tab_id);
+    subghz_host_uart_send("init_nrf24");
+    subghz_host_uart_send("nrf_scan 0 125");
+    ESP_LOGI(TAG, "nRF24 scanner page ready");
+}

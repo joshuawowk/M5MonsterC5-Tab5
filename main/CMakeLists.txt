@@ -17,15 +17,22 @@ idf_component_register(SRCS
                     "screens/subghz_listen_settings_screen.c"
                     "screens/subghz_manage_screen.c"
                     "screens/subghz_jammer_screen.c"
-                    "screens/subghz_tesla_screen.c"
+                    "screens/ble_detect_screen.c"
                     "screens/subghz_hunter_screen.c"
                     "screens/subghz_hunter_settings_screen.c"
                     "screens/subghz_scanner_screen.c"
+                    "screens/radio_waterfall.c"
+                    "screens/nrf_scanner_screen.c"
+                    "screens/subghz_spectrum_screen.c"
+                    "screens/nrf_esb_screen.c"
+                    "screens/subghz_brute_screen.c"
+                    "screens/subghz_jamdet_screen.c"
+                    "screens/ble_spam_screen.c"
                     "screens/subghz_scanner_settings_screen.c"
                     "screens/subghz_weather_screen.c"
                     "screens/subghz_settings_screen.c"
                     INCLUDE_DIRS "." "screens"
                     PRIV_INCLUDE_DIRS "${HS_CRACK_IDF_PATH}/components/mbedtls/mbedtls/library"
-                    REQUIRES lvgl m5stack_tab5 nvs_flash esp_lvgl_port driver esp_pm esp_netif esp_event esp_wifi espressif__esp_hosted esp_http_server esp_http_client fatfs janos_file_transfer pcap_reader pcap_summary pcap_flow pcap_analysis_store pcap_investigation pcap_extract pthread mbedtls)
+                    REQUIRES lvgl m5stack_tab5 nvs_flash esp_lvgl_port driver esp_pm esp_netif esp_event esp_wifi espressif__esp_hosted esp_http_server esp_http_client fatfs janos_file_transfer pcap_reader pcap_summary pcap_flow pcap_analysis_store pcap_investigation pcap_extract pthread mbedtls a164_keyboard)
 
 target_compile_definitions(${COMPONENT_LIB} PRIVATE LV_LVGL_H_INCLUDE_SIMPLE)
