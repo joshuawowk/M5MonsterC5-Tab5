@@ -3172,6 +3172,10 @@ static void uart_send_command_for_tab(const char *cmd);
 static bool build_wifi_connect_command(char *out, size_t out_sz, const char *ssid,
                                        const char *password, wifi_connect_auth_mode_t mode);
 static bool wifi_network_security_is_open(const char *security);
+// Remembered Wi-Fi passwords (Tab5 NVS store; defined near the NVS helpers).
+static const char *wifi_saved_get(const char *ssid);
+static void wifi_saved_put(const char *ssid, const char *password);
+static void load_wifi_saved_from_nvs(void);
 static void show_blackout_confirm_popup(void);
 static void blackout_confirm_yes_cb(lv_event_t *e);
 static void blackout_confirm_no_cb(lv_event_t *e);
@@ -10553,6 +10557,9 @@ static void mitm_connect_and_start_cb(lv_event_t *e)
     if (success) {
         ESP_LOGI(TAG, "MITM: Connected, starting PCAP net capture");
 
+        // Remember the working password so this network pre-fills next time.
+        if (password_provided) wifi_saved_put(ssid, password);
+
         uart_send_command_for_tab("start_pcap net");
 
         // Release display lock while reading UART for filename
@@ -10817,8 +10824,20 @@ static void show_mitm_popup(void)
     // portals.txt and home.txt. If it fails, the callback switches to manual input.
     ctx->mitm_use_saved_password = mitm_password_known || !is_open;
 
+    // If the board has no saved credential but the Tab5 remembers one for this
+    // network, pre-fill it and use it directly (Tab5 store, not JanOS --saved).
+    bool tab5_remembered = false;
+    if (!mitm_password_known && !is_open) {
+        const char *sp = wifi_saved_get(net->ssid);
+        if (sp) {
+            lv_textarea_set_text(ctx->mitm_password_input, sp);
+            ctx->mitm_use_saved_password = false;
+            tab5_remembered = true;
+        }
+    }
+
     ctx->mitm_status_label = lv_label_create(ctx->mitm_popup);
-    if (mitm_password_known) {
+    if (mitm_password_known || tab5_remembered) {
         lv_label_set_text(ctx->mitm_status_label,
                           "Known password found. Press Connect & Start.");
     } else if (!is_open) {
@@ -14700,6 +14719,8 @@ static void arp_connect_cb(lv_event_t *e)
     if (success) {
         ESP_LOGI(TAG, "ARP Poison: Connected to %s", arp_target_ssid);
         arp_wifi_connected = true;
+        // Remember the working password so this network pre-fills next time.
+        if (password && password[0]) wifi_saved_put(arp_target_ssid, password);
 
         if (arp_status_label) {
             lv_label_set_text_fmt(arp_status_label, "Connected to %s", arp_target_ssid);
@@ -15266,6 +15287,8 @@ static void nmap_connect_cb(lv_event_t *e)
     if (success) {
         ESP_LOGI(TAG, "Nmap: Connected to %s", nmap_target_ssid);
         nmap_wifi_connected = true;
+        // Remember the working password so this network pre-fills next time.
+        if (password && password[0]) wifi_saved_put(nmap_target_ssid, password);
 
         if (nmap_status_label) {
             lv_label_set_text_fmt(nmap_status_label, "Connected to %s", nmap_target_ssid);
@@ -16190,6 +16213,12 @@ static void show_nmap_page(void)
         lv_obj_add_event_cb(nmap_password_input, nmap_a164_exit_cb, LV_EVENT_READY, NULL);
         lv_obj_add_event_cb(nmap_password_input, nmap_a164_exit_cb, LV_EVENT_CANCEL, NULL);
 
+        // Pre-fill a remembered password for this network (Tab5 saved store).
+        if (nmap_target_password[0] == '\0') {
+            const char *sp = wifi_saved_get(nmap_target_ssid);
+            if (sp) lv_textarea_set_text(nmap_password_input, sp);
+        }
+
         lv_obj_t *btn_row = lv_obj_create(pass_section);
         lv_obj_set_size(btn_row, lv_pct(100), LV_SIZE_CONTENT);
         lv_obj_set_style_bg_opa(btn_row, LV_OPA_TRANSP, 0);
@@ -16298,6 +16327,12 @@ static void show_nmap_page(void)
         lv_obj_add_event_cb(nmap_password_input, nmap_password_input_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_add_event_cb(nmap_password_input, nmap_a164_exit_cb, LV_EVENT_READY, NULL);
         lv_obj_add_event_cb(nmap_password_input, nmap_a164_exit_cb, LV_EVENT_CANCEL, NULL);
+
+        // Pre-fill a remembered password for this network (Tab5 saved store).
+        if (nmap_target_password[0] == '\0') {
+            const char *sp = wifi_saved_get(nmap_target_ssid);
+            if (sp) lv_textarea_set_text(nmap_password_input, sp);
+        }
 
         nmap_connect_btn = lv_btn_create(pass_section);
         lv_obj_set_size(nmap_connect_btn, 120, 40);
@@ -16657,6 +16692,12 @@ static void show_arp_poison_page(void)
             lv_obj_set_style_border_width(arp_password_input, 1, 0);
             lv_obj_set_style_text_color(arp_password_input, lv_color_hex(0xFFFFFF), 0);
             lv_obj_add_event_cb(arp_password_input, arp_password_input_cb, LV_EVENT_CLICKED, NULL);
+
+            // Pre-fill a remembered password for this network (Tab5 saved store).
+            if (arp_target_password[0] == '\0') {
+                const char *sp = wifi_saved_get(arp_target_ssid);
+                if (sp) lv_textarea_set_text(arp_password_input, sp);
+            }
 
             // Connect button
             arp_connect_btn = lv_btn_create(pass_section);
@@ -51776,6 +51817,89 @@ static __attribute__((unused)) lv_obj_t *settings_popup_obj = NULL;
 
 // NVS keys
 #define NVS_NAMESPACE "settings"
+#define NVS_KEY_WIFI_SAVED      "wifi_saved"   // remembered Wi-Fi passwords (blob)
+
+// ---- Remembered Wi-Fi passwords (persisted on the Tab5, keyed by SSID) -------
+// `wifi_connect --saved` only reaches JanOS's own SD files; this lets the Tab5
+// itself remember a password the user typed, so the nmap / MITM / ARP connect
+// fields pre-fill (and connect in one tap) next time. Stored as one NVS blob.
+#define WIFI_SAVED_MAX 32
+typedef struct { char ssid[33]; char password[65]; } wifi_saved_entry_t;
+static wifi_saved_entry_t g_wifi_saved[WIFI_SAVED_MAX];
+static int g_wifi_saved_count = 0;
+
+static void load_wifi_saved_from_nvs(void)
+{
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return;
+    size_t sz = sizeof(g_wifi_saved);
+    memset(g_wifi_saved, 0, sizeof(g_wifi_saved));
+    if (nvs_get_blob(nvs, NVS_KEY_WIFI_SAVED, g_wifi_saved, &sz) == ESP_OK) {
+        g_wifi_saved_count = (int)(sz / sizeof(wifi_saved_entry_t));
+        if (g_wifi_saved_count > WIFI_SAVED_MAX) g_wifi_saved_count = WIFI_SAVED_MAX;
+        if (g_wifi_saved_count < 0) g_wifi_saved_count = 0;
+    } else {
+        g_wifi_saved_count = 0;
+    }
+    nvs_close(nvs);
+    ESP_LOGI(TAG, "Loaded %d remembered Wi-Fi password(s) from NVS", g_wifi_saved_count);
+}
+
+static void save_wifi_saved_to_nvs(void)
+{
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) return;
+    nvs_set_blob(nvs, NVS_KEY_WIFI_SAVED, g_wifi_saved,
+                 (size_t)g_wifi_saved_count * sizeof(wifi_saved_entry_t));
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
+
+// Return a remembered password for an SSID, or NULL if none is stored.
+static const char *wifi_saved_get(const char *ssid)
+{
+    if (!ssid || ssid[0] == '\0') return NULL;
+    for (int i = 0; i < g_wifi_saved_count; i++) {
+        if (strcmp(g_wifi_saved[i].ssid, ssid) == 0 && g_wifi_saved[i].password[0]) {
+            return g_wifi_saved[i].password;
+        }
+    }
+    return NULL;
+}
+
+// Remember (insert or update) a working Wi-Fi password for an SSID. No-op for
+// empty SSID/password or an unchanged entry. Evicts the oldest when full.
+static void wifi_saved_put(const char *ssid, const char *password)
+{
+    if (!ssid || ssid[0] == '\0' || !password || password[0] == '\0') return;
+    if (strlen(ssid) >= sizeof(g_wifi_saved[0].ssid) ||
+        strlen(password) >= sizeof(g_wifi_saved[0].password)) return;
+
+    for (int i = 0; i < g_wifi_saved_count; i++) {
+        if (strcmp(g_wifi_saved[i].ssid, ssid) == 0) {
+            if (strcmp(g_wifi_saved[i].password, password) == 0) return;  // unchanged
+            snprintf(g_wifi_saved[i].password, sizeof(g_wifi_saved[i].password), "%s", password);
+            save_wifi_saved_to_nvs();
+            ESP_LOGI(TAG, "Updated remembered Wi-Fi password for '%s'", ssid);
+            return;
+        }
+    }
+
+    int idx;
+    if (g_wifi_saved_count < WIFI_SAVED_MAX) {
+        idx = g_wifi_saved_count++;
+    } else {
+        memmove(&g_wifi_saved[0], &g_wifi_saved[1],
+                (WIFI_SAVED_MAX - 1) * sizeof(wifi_saved_entry_t));
+        idx = WIFI_SAVED_MAX - 1;
+    }
+    memset(&g_wifi_saved[idx], 0, sizeof(g_wifi_saved[idx]));
+    snprintf(g_wifi_saved[idx].ssid, sizeof(g_wifi_saved[idx].ssid), "%s", ssid);
+    snprintf(g_wifi_saved[idx].password, sizeof(g_wifi_saved[idx].password), "%s", password);
+    save_wifi_saved_to_nvs();
+    ESP_LOGI(TAG, "Remembered Wi-Fi password for '%s' (%d stored)", ssid, g_wifi_saved_count);
+}
+
 #define NVS_KEY_RED_TEAM        "red_team"
 #define NVS_KEY_SCREEN_TIMEOUT  "scr_timeout"
 #define NVS_KEY_SCREEN_BRIGHT   "scr_bright"
@@ -61688,6 +61812,7 @@ void app_main(void)
     load_clock_settings_from_nvs();
     load_wd_autoupload_from_nvs();
     load_janos_ft_baud_from_nvs();
+    load_wifi_saved_from_nvs();  // remembered Wi-Fi passwords
 
     // Kick the startup melody off here, the first moment both prerequisites are
     // met: the codec is up and NVS has told us which melody to play. It used to
