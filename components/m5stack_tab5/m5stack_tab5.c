@@ -599,24 +599,59 @@ esp_err_t bsp_sdcard_init(char* mount_point, size_t max_files)
     slot_config.d2                  = GPIO_SDMMC_D2;
     slot_config.d3                  = GPIO_SDMMC_D3;
     // slot_config.cd = GPIO_SDMMC_DET;
-    // slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+    // Enable the SoC's internal pull-ups on CMD/DATA in addition to any board
+    // pull-ups. Harmless where external pull-ups already exist, and rescues
+    // marginal cards/contacts that otherwise fail to initialize with
+    // ESP_ERR_TIMEOUT / ESP_ERR_INVALID_RESPONSE.
+    slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
 
     /**
      * @brief Options for mounting the filesystem.
-     *   If format_if_mount_failed is set to true, SD card will be partitioned and
-     *   formatted in case when mounting fails.
+     *   format_if_mount_failed stays false on purpose: never auto-reformat a
+     *   user's card. A card IDF's FATFS cannot mount (exFAT/SDXC or unformatted)
+     *   must be reformatted FAT32 by the user, not wiped by us.
      */
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false, .max_files = max_files, .allocation_unit_size = 16 * 1024};
 
-    ret_val = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
+    /* Robust init: some cards/contacts are unreliable at 40 MHz 4-bit. Try the
+     * fast path first, then fall back to slower/narrower buses before giving up.
+     * esp_vfs_fat_sdmmc_mount() tears down the host it created on a failed
+     * attempt, so re-calling it with a gentler config is safe. A bad-filesystem
+     * result (ESP_FAIL) is not retried — the bus is fine, the card isn't FAT. */
+    static const struct {
+        int freq_khz;
+        int width;
+    } sd_attempts[] = {
+        {SDMMC_FREQ_HIGHSPEED, 4},  // 40 MHz, 4-bit (original / fastest)
+        {SDMMC_FREQ_DEFAULT, 4},    // 20 MHz, 4-bit
+        {SDMMC_FREQ_DEFAULT, 1},    // 20 MHz, 1-bit (most tolerant)
+    };
+    ret_val = ESP_FAIL;
+    for (size_t i = 0; i < sizeof(sd_attempts) / sizeof(sd_attempts[0]); i++) {
+        host.max_freq_khz = sd_attempts[i].freq_khz;
+        slot_config.width = sd_attempts[i].width;
+        ret_val = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
+        if (ret_val == ESP_OK) {
+            if (i > 0) {
+                ESP_LOGW(TAG, "SD mounted on fallback attempt %d (%d kHz, %d-bit)", (int)i + 1,
+                         sd_attempts[i].freq_khz, sd_attempts[i].width);
+            }
+            break;
+        }
+        if (ret_val == ESP_FAIL) {
+            break;  // filesystem invalid; retrying the bus won't help
+        }
+        ESP_LOGW(TAG, "SD init attempt %d failed (%s); trying a slower/narrower bus", (int)i + 1,
+                 esp_err_to_name(ret_val));
+    }
 
     /* Check for SDMMC mount result. */
     if (ret_val != ESP_OK) {
         if (ret_val == ESP_FAIL) {
             ESP_LOGE(TAG,
-                     "Failed to mount filesystem. "
-                     "If you want the card to be formatted, set the EXAMPLE_FORMAT_IF_MOUNT_FAILED menuconfig option.");
+                     "Failed to mount filesystem: the card is likely exFAT/SDXC or unformatted. "
+                     "Reformat it FAT32 (<=32 GB) to use it.");
         } else {
             ESP_LOGE(TAG,
                      "Failed to initialize the card (%s). "

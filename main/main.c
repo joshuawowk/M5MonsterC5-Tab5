@@ -21,15 +21,19 @@
 #include "freertos/event_groups.h"
 #include "freertos/timers.h"
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_private/esp_clk.h"
 #include "esp_rom_crc.h"
 #include "nvs_flash.h"
 #include "nvs.h"
+#include "esp_system.h"  // esp_restart() for orientation-toggle reboot
+#include "a164_keyboard.h"  // M5 Tab5 A164 physical keyboard (I2C 0x6D) -> LVGL
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "bsp/m5stack_tab5.h"
+#include "esp_lcd_touch.h"  // touch polling for dimmed-screen wake (screen_touch_is_pressed)
 #include "lvgl.h"
 #if LV_USE_TINY_TTF
 #include "src/libs/tiny_ttf/lv_tiny_ttf.h"
@@ -90,7 +94,11 @@ extern void pthread_internal_local_storage_destructor_callback(TaskHandle_t hand
 
 
 #define JANOS_TAB_VERSION "1.5.4"
-#define JANOS_VERSION_REQUIRED "1.7.4"
+// Minimum companion JanOS this app is built against. A board on this version or
+// newer is compatible; older raises the version-mismatch warning. Compared with
+// janos_version_is_compatible() (semver), not an exact string match, so a board
+// running a newer JanOS is not flagged.
+#define JANOS_VERSION_REQUIRED "1.7.1"
 
 #include "lwip/netdb.h"
 #include <dirent.h>
@@ -1660,10 +1668,10 @@ typedef enum {
 } transport_kind_t;
 
 // Tab contexts (Grove, USB, MBus, INTERNAL)
-static tab_context_t grove_ctx = {0};
-static tab_context_t usb_ctx = {0};
-static tab_context_t mbus_ctx = {0};
-static tab_context_t internal_ctx = {0};
+EXT_RAM_BSS_ATTR static tab_context_t grove_ctx;
+EXT_RAM_BSS_ATTR static tab_context_t usb_ctx;
+EXT_RAM_BSS_ATTR static tab_context_t mbus_ctx;
+EXT_RAM_BSS_ATTR static tab_context_t internal_ctx;
 
 // Red Team mode - controls visibility of offensive features (declared early for use in all functions)
 static bool enable_red_team = false;  // Default: false (safe mode)
@@ -2628,6 +2636,10 @@ static bool g_wd_autoupload_poweroff = false;  // power off the Tab5 after a suc
 static lv_obj_t *nmap_page = NULL;
 static lv_obj_t *nmap_password_input = NULL;
 static lv_obj_t *nmap_keyboard = NULL;
+/* When the A164 physical keyboard is connected, a focused text field types via
+ * the A164 with the on-screen keyboard hidden. This tracks that field so the
+ * A164 nav timer stays in text-entry mode instead of evicting it from the group. */
+static lv_obj_t *s_a164_ta = NULL;
 static lv_obj_t *nmap_connect_btn = NULL;
 static lv_obj_t *nmap_status_label = NULL;
 static lv_obj_t *nmap_hosts_container = NULL;
@@ -2871,10 +2883,10 @@ static char ap_radar_target_bssid[18] = {0};
 static int ap_radar_target_channel = 0;
 
 // BT nRF24 Jammer
-static const char *k_jam_bands[5] = { "ble", "bt", "wifi", "drone", "all" };
+static const char *k_jam_bands[7] = { "ble", "bt", "wifi", "drone", "all", "ble-adv", "zigbee" };
 static int bt_jammer_band = 0; // default: ble
 static lv_obj_t *bt_jammer_page = NULL;
-static lv_obj_t *bt_jammer_band_btns[5] = {NULL};
+static lv_obj_t *bt_jammer_band_btns[7] = {NULL};
 static lv_obj_t *bt_jammer_big_btn = NULL;
 static lv_obj_t *bt_jammer_big_btn_lbl = NULL;
 static lv_obj_t *bt_jammer_status_lbl = NULL;
@@ -3104,6 +3116,8 @@ static void settings_tile_event_cb(lv_event_t *e);
 static void settings_back_btn_event_cb(lv_event_t *e);
 static void show_scan_time_popup(void);
 static void show_theme_popup(void);
+static void app_kb_bind(lv_obj_t *kb, lv_obj_t *ta);  // on-screen + A164 physical kb bind
+static void app_kb_submit_bind(lv_obj_t *field, lv_obj_t *action_btn);  // Enter-in-field fires action_btn
 static void style_theme_switch(lv_obj_t *sw);
 static void theme_dark_mode_switch_cb(lv_event_t *e);
 static void theme_boot_sound_dropdown_cb(lv_event_t *e);
@@ -3158,6 +3172,10 @@ static void uart_send_command_for_tab(const char *cmd);
 static bool build_wifi_connect_command(char *out, size_t out_sz, const char *ssid,
                                        const char *password, wifi_connect_auth_mode_t mode);
 static bool wifi_network_security_is_open(const char *security);
+// Remembered Wi-Fi passwords (Tab5 NVS store; defined near the NVS helpers).
+static const char *wifi_saved_get(const char *ssid);
+static void wifi_saved_put(const char *ssid, const char *password);
+static void load_wifi_saved_from_nvs(void);
 static void show_blackout_confirm_popup(void);
 static void blackout_confirm_yes_cb(lv_event_t *e);
 static void blackout_confirm_no_cb(lv_event_t *e);
@@ -3930,7 +3948,10 @@ static void home_read_remote_meta(tab_context_t *ctx)
         usb_rx_exclusive = false;
     }
 
-    ctx->home_handshake_count = pcap_count;
+    // Count = board's own handshakes (real MonsterC5) PLUS any streamed to the
+    // Tab5's local card (DIY MonsterC5 with no SD). The two dirs are disjoint, so
+    // this is correct for both and doesn't get clobbered to the board's 0.
+    ctx->home_handshake_count = pcap_count + count_local_pcap_files("/sdcard/lab/handshakes");
     ctx->home_wpasec_present  = wpasec_ok;
     ctx->home_vendors_present = vendors_ok;
     ctx->home_wigle_present   = wigle_ok;
@@ -3966,7 +3987,11 @@ static bool home_meta_refresh_allowed(const tab_context_t *ctx)
 static void trigger_home_meta_refresh(tab_context_t *ctx, bool force)
 {
     if (!ctx || !dashboard_enabled) return;
-    if (!ctx->sd_card_present) return;
+    // The dashboard reads the Tab5's own /sdcard (wigle/handshakes/etc), so run
+    // the refresh whenever EITHER the attached board or the Tab5 has a card. A DIY
+    // MonsterC5 with no card of its own still uses the Tab5's, so gating only on
+    // ctx->sd_card_present left the Files spinner running and stats blank forever.
+    if (!ctx->sd_card_present && !internal_sd_present) return;
     if (ctx->home_meta_refresh_running) return;
     if (!home_meta_refresh_allowed(ctx)) return;
     if (tab_id_for_ctx(ctx) != current_tab) return;
@@ -4090,7 +4115,7 @@ static void update_home_dashboard_labels(tab_context_t *ctx, int battery_pct)
     }
 
     if (ctx->home_handshakes_label) {
-        if (!ctx->sd_card_present) {
+        if (!ctx->sd_card_present && !internal_sd_present) {
             lv_label_set_text(ctx->home_handshakes_label, "NO SD");
             lv_obj_set_style_text_color(ctx->home_handshakes_label, COLOR_MATERIAL_RED, 0);
         } else {
@@ -4153,7 +4178,7 @@ static void update_home_dashboard_labels(tab_context_t *ctx, int battery_pct)
     }
 
     if (ctx->home_files_label && files_loaded) {
-        if (!ctx->sd_card_present) {
+        if (!ctx->sd_card_present && !internal_sd_present) {
             lv_label_set_text(ctx->home_files_label, "wpa-sec: " LV_SYMBOL_CLOSE);
             lv_obj_set_style_text_color(ctx->home_files_label, COLOR_MATERIAL_RED, 0);
             if (ctx->home_files_detail_label) {
@@ -4491,13 +4516,38 @@ static void sleep_overlay_press_cb(lv_event_t *e)
     wake_screen("touch");
 }
 
+// Poll the touch controller directly for a press. Used to wake a dimmed screen.
+static bool screen_touch_is_pressed(void)
+{
+    esp_lcd_touch_handle_t tp = bsp_display_get_touch_handle();
+    if (tp == NULL) {
+        return false;
+    }
+
+    esp_lcd_touch_point_data_t points[1];
+    uint8_t touch_cnt = 0;
+    if (esp_lcd_touch_read_data(tp) != ESP_OK) {
+        return false;
+    }
+    return esp_lcd_touch_get_data(tp, points, &touch_cnt, 1) == ESP_OK && touch_cnt > 0;
+}
+
 // Screen timeout timer callback - dims screen after inactivity and handles wake
 static void screen_timeout_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
 
-    // If screen is dimmed, touch overlay handles wake via sleep_overlay_press_cb
+    // While dimmed, wake on a tap. The GT911 uses a polling LVGL indev, so its
+    // sleep_overlay catches the tap on its own; but the ST7123 is registered as an
+    // interrupt-driven (event-mode) indev, and its INT does not wake the LVGL read while
+    // the panel is dimmed -- so the overlay click never fires and the screen appears
+    // stuck off. Poll the controller directly here (this timer keeps ticking regardless
+    // of the touch INT), which restores wake for the ST7123 the way the old proximity
+    // poll did, and is harmless on the GT911.
     if (screen_dimmed) {
+        if (screen_touch_is_pressed()) {
+            wake_screen("touch");
+        }
         return;
     }
 
@@ -8653,7 +8703,9 @@ subghz_tab_state_t *subghz_host_alloc_state(void)
         return NULL;
     }
     st->freq_mhz = 433.92f;
-    st->raw_mode = false;
+    st->raw_mode = true;   /* default to Raw: shows unrecognized remotes (e.g. a
+                            * 315 MHz keyfob) that Decoded mode would hide. Toggle
+                            * to Decoded for known-protocol parsing. */
     return st;
 }
 
@@ -9261,6 +9313,97 @@ static void create_tab_bar(void)
 }
 
 // Main tile click handler
+// ---- Grouped submenu popups (Detectors, Radios) ----------------------------
+// A home tile opens a small modal listing its grouped tools, keeping the home
+// grid tidy. Tapping an option closes the popup and opens that tool's page;
+// tapping the dimmed backdrop dismisses.
+static lv_obj_t *g_submenu_popup = NULL;
+
+static void submenu_popup_dismiss(void)
+{
+    if (g_submenu_popup) {
+        lv_obj_del(g_submenu_popup);
+        g_submenu_popup = NULL;
+    }
+}
+
+static void submenu_popup_overlay_cb(lv_event_t *e)
+{
+    if (lv_event_get_target(e) == lv_event_get_current_target(e)) {
+        submenu_popup_dismiss();
+    }
+}
+
+static void submenu_option_cb(lv_event_t *e)
+{
+    const char *name = (const char *)lv_event_get_user_data(e);
+    submenu_popup_dismiss();
+    if (!name) return;
+    if (strcmp(name, "Deauth Detector") == 0) show_deauth_detector_page();
+    else if (strcmp(name, "Anti-Surv") == 0) show_antisurv_page();
+    else if (strcmp(name, "Sub-GHz") == 0) show_subghz_page();
+    else if (strcmp(name, "Jammer") == 0) show_jammer_page();
+    else if (strcmp(name, "nRF Scan") == 0) show_nrf_scanner_page();
+    else if (strcmp(name, "SG Spectrum") == 0) show_subghz_spectrum_page();
+    else if (strcmp(name, "ESB/MJ") == 0) show_nrf_esb_page();
+    else if (strcmp(name, "Brute") == 0) show_subghz_brute_page();
+    else if (strcmp(name, "Jam Detect") == 0) show_subghz_jamdet_page();
+    else if (strcmp(name, "BLE Spam") == 0) show_ble_spam_page();
+}
+
+static void show_group_submenu(const char *title, bool radios)
+{
+    lv_obj_t *container = get_current_tab_container();
+    if (!container || g_submenu_popup) return;
+
+    g_submenu_popup = lv_obj_create(container);
+    style_modal_overlay(g_submenu_popup, dark_mode_enabled ? LV_OPA_50 : LV_OPA_30);
+    lv_obj_add_flag(g_submenu_popup, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(g_submenu_popup, submenu_popup_overlay_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *card = lv_obj_create(g_submenu_popup);
+    lv_obj_set_size(card, 500, LV_SIZE_CONTENT);
+    lv_obj_center(card);
+    style_popup_card(card, 12, ui_tab_icon_color());
+    lv_obj_set_style_pad_all(card, 16, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(card, 12, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *ttl = lv_label_create(card);
+    lv_label_set_text(ttl, title);
+    lv_obj_set_style_text_font(ttl, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_color(ttl, dark_mode_enabled ? COLOR_LAB5_MAGENTA : ui_tab_icon_color(), 0);
+
+    lv_obj_t *row = lv_obj_create(card);
+    lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 4, 0);
+    lv_obj_set_style_pad_gap(row, 12, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    if (radios) {
+        create_tile(row, LV_SYMBOL_BARS, "Sub-GHz", COLOR_MATERIAL_PINK, submenu_option_cb, "Sub-GHz");
+        create_tile(row, LV_SYMBOL_WARNING, "Jammer", COLOR_MATERIAL_RED, submenu_option_cb, "Jammer");
+        create_tile(row, LV_SYMBOL_BARS, "nRF Scan", COLOR_MATERIAL_AMBER, submenu_option_cb, "nRF Scan");
+        create_tile(row, LV_SYMBOL_BARS, "SG\nSpectrum", COLOR_MATERIAL_PINK, submenu_option_cb, "SG Spectrum");
+        create_tile(row, LV_SYMBOL_LIST, "ESB/MJ", COLOR_MATERIAL_AMBER, submenu_option_cb, "ESB/MJ");
+        create_tile(row, LV_SYMBOL_UPLOAD, "Brute", COLOR_MATERIAL_PINK, submenu_option_cb, "Brute");
+        create_tile(row, LV_SYMBOL_WARNING, "Jam\nDetect", COLOR_MATERIAL_CYAN, submenu_option_cb, "Jam Detect");
+        create_tile(row, LV_SYMBOL_BLUETOOTH, "BLE\nSpam", COLOR_MATERIAL_PURPLE, submenu_option_cb, "BLE Spam");
+    } else {
+        create_tile(row, LV_SYMBOL_EYE_OPEN, "Deauth\nDetector", COLOR_MATERIAL_AMBER, submenu_option_cb, "Deauth Detector");
+        create_tile(row, LV_SYMBOL_EYE_OPEN, "Anti-Surv", COLOR_MATERIAL_PINK, submenu_option_cb, "Anti-Surv");
+    }
+}
+
+static void show_detectors_popup(void) { show_group_submenu("Detectors", false); }
+static void show_radios_popup(void) { show_group_submenu("Radios", true); }
+
 static void main_tile_event_cb(lv_event_t *e)
 {
     const char *tile_name = (const char *)lv_event_get_user_data(e);
@@ -9293,6 +9436,10 @@ static void main_tile_event_cb(lv_event_t *e)
         show_wardrive_page();
     } else if (strcmp(tile_name, "Anti-Surv") == 0) {
         show_antisurv_page();
+    } else if (strcmp(tile_name, "Detectors") == 0) {
+        show_ble_detect_page();
+    } else if (strcmp(tile_name, "Radios") == 0) {
+        show_radios_popup();
     } else if (strcmp(tile_name, "IoT") == 0) {
         show_zig_recon_page();
     } else if (strcmp(tile_name, "Sub-GHz") == 0) {
@@ -9391,7 +9538,7 @@ static void hidden_ssid_textarea_focus_cb(lv_event_t *e)
     (void)e;
     if (hidden_ssid_keyboard) {
         lv_obj_clear_flag(hidden_ssid_keyboard, LV_OBJ_FLAG_HIDDEN);
-        lv_keyboard_set_textarea(hidden_ssid_keyboard, hidden_ssid_textarea);
+        app_kb_bind(hidden_ssid_keyboard, hidden_ssid_textarea);
     }
 }
 
@@ -9611,7 +9758,7 @@ static void show_hidden_ssid_popup(hidden_ssid_callback_t callback)
     lv_obj_set_size(hidden_ssid_keyboard, lv_pct(100), 260);
     lv_obj_align(hidden_ssid_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     style_on_screen_keyboard(hidden_ssid_keyboard);
-    lv_keyboard_set_textarea(hidden_ssid_keyboard, hidden_ssid_textarea);
+    app_kb_bind(hidden_ssid_keyboard, hidden_ssid_textarea);
     lv_obj_add_flag(hidden_ssid_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(hidden_ssid_keyboard, hidden_ssid_keyboard_ready_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(hidden_ssid_keyboard, hidden_ssid_keyboard_ready_cb, LV_EVENT_CANCEL, NULL);
@@ -10247,6 +10394,12 @@ static void mitm_popup_close_cb(lv_event_t *e)
 
     tab_context_t *ctx = get_current_ctx();
     if (ctx && ctx->mitm_popup_overlay) {
+        // Release the A164 group if this field held it, so the nav timer
+        // repopulates the underlying page once the popup is gone.
+        if (s_a164_ta == ctx->mitm_password_input) {
+            s_a164_ta = NULL;
+            a164_kbd_route_to(NULL);
+        }
         lv_obj_del(ctx->mitm_popup_overlay);
         ctx->mitm_popup_overlay = NULL;
         ctx->mitm_popup = NULL;
@@ -10276,12 +10429,28 @@ static void mitm_keyboard_cb(lv_event_t *e)
 static void mitm_password_input_cb(lv_event_t *e)
 {
     tab_context_t *ctx = get_current_ctx();
-    if (ctx && lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
+    if (!ctx) return;
+    if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
         ctx->mitm_use_saved_password = false;
     }
-    if (ctx && ctx->mitm_keyboard) {
+    if (!ctx->mitm_password_input) return;
+
+    if (a164_kbd_present()) {
+        // Physical A164 attached: this popup is an overlay, not
+        // current_visible_page, so the nav timer never adds its field to the
+        // A164 group -- app_kb_bind()'s "focus only if already in group" then
+        // silently no-ops and the field takes neither touch nor key input.
+        // Point the A164 straight at the field instead (same effect as tapping a
+        // field on a real page), and keep the on-screen keyboard hidden.
+        if (ctx->mitm_keyboard) {
+            lv_obj_add_flag(ctx->mitm_keyboard, LV_OBJ_FLAG_HIDDEN);
+        }
+        s_a164_ta = ctx->mitm_password_input;
+        a164_kbd_route_to(ctx->mitm_password_input);
+    } else if (ctx->mitm_keyboard) {
+        // Touch only: drive input from the on-screen keyboard.
         lv_obj_clear_flag(ctx->mitm_keyboard, LV_OBJ_FLAG_HIDDEN);
-        lv_keyboard_set_textarea(ctx->mitm_keyboard, ctx->mitm_password_input);
+        app_kb_bind(ctx->mitm_keyboard, ctx->mitm_password_input);
     }
 }
 
@@ -10388,6 +10557,9 @@ static void mitm_connect_and_start_cb(lv_event_t *e)
     if (success) {
         ESP_LOGI(TAG, "MITM: Connected, starting PCAP net capture");
 
+        // Remember the working password so this network pre-fills next time.
+        if (password_provided) wifi_saved_put(ssid, password);
+
         uart_send_command_for_tab("start_pcap net");
 
         // Release display lock while reading UART for filename
@@ -10414,6 +10586,11 @@ static void mitm_connect_and_start_cb(lv_event_t *e)
                         if (pc == '\n' || pc == '\r') {
                             if (pcap_line_pos > 0) {
                                 pcap_line[pcap_line_pos] = '\0';
+                                // The C5 has no SD, so it streams the pcap to us as [FILEA]
+                                // frames (global header first, then records). Capture them to
+                                // our /sdcard; the "PCAP ... capture started -> /sdcard/..." log
+                                // line is not a frame and still falls through to the filename grab.
+                                if (subghz_host_recv_file_stream(pcap_line)) { pcap_line_pos = 0; continue; }
                                 char *pcap_path = strstr(pcap_line, "/sdcard/");
                                 if (pcap_path) {
                                     char *slash = strrchr(pcap_path, '/');
@@ -10647,8 +10824,20 @@ static void show_mitm_popup(void)
     // portals.txt and home.txt. If it fails, the callback switches to manual input.
     ctx->mitm_use_saved_password = mitm_password_known || !is_open;
 
+    // If the board has no saved credential but the Tab5 remembers one for this
+    // network, pre-fill it and use it directly (Tab5 store, not JanOS --saved).
+    bool tab5_remembered = false;
+    if (!mitm_password_known && !is_open) {
+        const char *sp = wifi_saved_get(net->ssid);
+        if (sp) {
+            lv_textarea_set_text(ctx->mitm_password_input, sp);
+            ctx->mitm_use_saved_password = false;
+            tab5_remembered = true;
+        }
+    }
+
     ctx->mitm_status_label = lv_label_create(ctx->mitm_popup);
-    if (mitm_password_known) {
+    if (mitm_password_known || tab5_remembered) {
         lv_label_set_text(ctx->mitm_status_label,
                           "Known password found. Press Connect & Start.");
     } else if (!is_open) {
@@ -10682,6 +10871,8 @@ static void show_mitm_popup(void)
     lv_obj_set_style_bg_color(ctx->mitm_connect_btn, lv_color_hex(0x2E7D32), LV_STATE_PRESSED);
     lv_obj_set_style_radius(ctx->mitm_connect_btn, 8, 0);
     lv_obj_add_event_cb(ctx->mitm_connect_btn, mitm_connect_and_start_cb, LV_EVENT_CLICKED, NULL);
+    // Enter in the password field fires Connect & Start (A164 physical keyboard).
+    app_kb_submit_bind(ctx->mitm_password_input, ctx->mitm_connect_btn);
 
     lv_obj_t *connect_label = lv_label_create(ctx->mitm_connect_btn);
     lv_label_set_text(connect_label, "Connect & Start");
@@ -10717,7 +10908,7 @@ static void show_mitm_popup(void)
     lv_obj_set_size(ctx->mitm_keyboard, lv_pct(100), 260);
     lv_obj_align(ctx->mitm_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     style_on_screen_keyboard(ctx->mitm_keyboard);
-    lv_keyboard_set_textarea(ctx->mitm_keyboard, ctx->mitm_password_input);
+    app_kb_bind(ctx->mitm_keyboard, ctx->mitm_password_input);
     lv_obj_add_event_cb(ctx->mitm_keyboard, mitm_keyboard_cb, LV_EVENT_ALL, NULL);
     lv_obj_add_flag(ctx->mitm_keyboard, LV_OBJ_FLAG_HIDDEN);
 }
@@ -13571,6 +13762,248 @@ static void append_handshaker_log(const char *message, hs_log_type_t log_type)
 }
 
 // Handshaker monitor task - reads UART for handshake capture
+// ---- Rerouted handshake PCAP reception (board with no SD streams it to us) ----
+// The board sends captured PCAPs base64-framed over UART; we reassemble and save
+// them to the Tab5's own /sdcard so they show up in Compromised Data.
+#define PCAP_RX_MAX (96 * 1024)
+static uint8_t *g_pcap_rx_buf = NULL;
+static size_t g_pcap_rx_len = 0;
+static size_t g_pcap_rx_expected = 0;
+static uint32_t g_pcap_rx_sum = 0;
+static bool g_pcap_rx_active = false;
+static char g_pcap_rx_name[96] = {0};
+
+static int pcap_b64_val(char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+static int pcap_b64_decode_line(const char *in, uint8_t *out, size_t out_max)
+{
+    int acc = 0, nbits = 0;
+    size_t n = 0;
+    for (const char *p = in; *p; p++) {
+        if (*p == '=' || *p == '\r' || *p == '\n' || *p == ' ') continue;
+        int v = pcap_b64_val(*p);
+        if (v < 0) return -1;
+        acc = (acc << 6) | v;
+        nbits += 6;
+        if (nbits >= 8) {
+            nbits -= 8;
+            if (n >= out_max) return -1;
+            out[n++] = (uint8_t)((acc >> nbits) & 0xFF);
+        }
+    }
+    return (int)n;
+}
+
+/* ---- Generic file-stream receiver -------------------------------------------
+ * The MonsterC5 has no SD, so any file it wants stored is streamed to us and
+ * written to the Tab5's SD at /sdcard/<relpath>. Frames (mirror the PCAP path):
+ *   [FILEX name=<relpath> size=<n>]  [FILED]<base64>...  [FILEX-END sum=<hex>]
+ * Any UART-reading task can call subghz_host_recv_file_stream() on each line. */
+#define FILX_RX_MAX (256 * 1024)
+static uint8_t *g_filx_buf = NULL;
+static size_t   g_filx_len = 0, g_filx_expected = 0;
+static uint32_t g_filx_sum = 0;
+static bool     g_filx_active = false;
+static char     g_filx_relpath[128] = {0};
+
+/* mkdir every parent directory of a full /sdcard/... file path. */
+static void tab5_mkdir_parents(const char *path)
+{
+    char tmp[256];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') { *p = '\0'; mkdir(tmp, 0777); *p = '/'; }
+    }
+}
+
+static bool tab5_recv_file_stream_line(const char *line)
+{
+    if (strncmp(line, "[FILEX name=", 12) == 0) {
+        g_filx_active = false; g_filx_len = 0; g_filx_sum = 0; g_filx_expected = 0;
+        g_filx_relpath[0] = '\0';
+        const char *n = line + 12;
+        const char *sp = strstr(n, " size=");
+        if (!sp) return true;
+        size_t nl = (size_t)(sp - n);
+        if (nl >= sizeof(g_filx_relpath)) nl = sizeof(g_filx_relpath) - 1;
+        memcpy(g_filx_relpath, n, nl); g_filx_relpath[nl] = '\0';
+        long sz = strtol(sp + 6, NULL, 10);
+        if (sz <= 0 || sz > FILX_RX_MAX) return true;
+        if (!g_filx_buf) g_filx_buf = heap_caps_malloc(FILX_RX_MAX, MALLOC_CAP_SPIRAM);
+        if (!g_filx_buf) return true;
+        g_filx_expected = (size_t)sz;
+        g_filx_active = true;
+        return true;
+    }
+    if (strncmp(line, "[FILED]", 7) == 0) {
+        if (!g_filx_active) return true;
+        uint8_t tmp[64];
+        int dn = pcap_b64_decode_line(line + 7, tmp, sizeof(tmp));
+        if (dn < 0) { g_filx_active = false; return true; }
+        for (int i = 0; i < dn && g_filx_len < g_filx_expected; i++) {
+            g_filx_buf[g_filx_len++] = tmp[i];
+            g_filx_sum += tmp[i];
+        }
+        return true;
+    }
+    if (strncmp(line, "[FILEX-END", 10) == 0) {
+        if (!g_filx_active) return true;
+        g_filx_active = false;
+        uint32_t want = 0;
+        const char *p = strstr(line, "sum=");
+        if (p) want = (uint32_t)strtoul(p + 4, NULL, 16);
+        if (g_filx_len == g_filx_expected && g_filx_sum == want && g_filx_relpath[0]) {
+            char path[220];
+            snprintf(path, sizeof(path), "/sdcard/%s", g_filx_relpath);
+            tab5_mkdir_parents(path);
+            /* never overwrite: insert _1/_2/... before the extension if present */
+            struct stat pst;
+            if (stat(path, &pst) == 0) {
+                char stem[180];
+                snprintf(stem, sizeof(stem), "/sdcard/%s", g_filx_relpath);
+                char suffix[12] = "";
+                char *ext = strrchr(stem, '.');
+                if (ext && strrchr(stem, '/') < ext) { snprintf(suffix, sizeof(suffix), "%s", ext); *ext = '\0'; }
+                for (int k = 1; k < 1000; k++) {
+                    snprintf(path, sizeof(path), "%s_%d%s", stem, k, suffix);
+                    if (stat(path, &pst) != 0) break;
+                }
+            }
+            FILE *f = fopen(path, "wb");
+            if (f) {
+                fwrite(g_filx_buf, 1, g_filx_len, f);
+                fclose(f);
+                ESP_LOGI(TAG, "[FILE-RX] saved %s (%u bytes)", path, (unsigned)g_filx_len);
+            } else {
+                ESP_LOGW(TAG, "[FILE-RX] could not open %s for write", path);
+            }
+        } else {
+            ESP_LOGW(TAG, "[FILE-RX] discarded '%s' (%u/%u bytes, sum %08lX/%08lX)",
+                     g_filx_relpath, (unsigned)g_filx_len, (unsigned)g_filx_expected,
+                     (unsigned long)g_filx_sum, (unsigned long)want);
+        }
+        return true;
+    }
+    if (strncmp(line, "[FILEA name=", 12) == 0) {
+        /* Append frame: [FILEA name=<relpath>]<base64> -> append to /sdcard/<relpath> */
+        const char *n = line + 12;
+        const char *close = strchr(n, ']');
+        if (!close) return true;
+        char rel[128];
+        size_t nl = (size_t)(close - n);
+        if (nl >= sizeof(rel)) nl = sizeof(rel) - 1;
+        memcpy(rel, n, nl); rel[nl] = '\0';
+        uint8_t dec[64];
+        int dn = pcap_b64_decode_line(close + 1, dec, sizeof(dec));
+        if (dn <= 0) return true;
+        char path[220];
+        snprintf(path, sizeof(path), "/sdcard/%s", rel);
+        tab5_mkdir_parents(path);
+        FILE *f = fopen(path, "a");
+        if (f) { fwrite(dec, 1, (size_t)dn, f); fclose(f); }
+        else { ESP_LOGW(TAG, "[FILE-RX] append open failed: %s", path); }
+        return true;
+    }
+    return false;
+}
+
+bool subghz_host_recv_file_stream(const char *line) { return tab5_recv_file_stream_line(line); }
+
+// Handle one line of the [PCAPX]/[PCAPD]/[PCAPX-END] transfer. Returns true if the
+// line was part of a transfer (and should not be parsed as a normal log line).
+static bool handshaker_handle_pcap_line(const char *line)
+{
+    if (strncmp(line, "[PCAPX name=", 12) == 0) {
+        g_pcap_rx_active = false;
+        g_pcap_rx_len = 0;
+        g_pcap_rx_sum = 0;
+        g_pcap_rx_expected = 0;
+        g_pcap_rx_name[0] = '\0';
+        const char *n = line + 12;
+        const char *sp = strstr(n, " size=");
+        if (sp) {
+            size_t nl = (size_t)(sp - n);
+            if (nl >= sizeof(g_pcap_rx_name)) nl = sizeof(g_pcap_rx_name) - 1;
+            memcpy(g_pcap_rx_name, n, nl);
+            g_pcap_rx_name[nl] = '\0';
+            g_pcap_rx_expected = (size_t)strtoul(sp + 6, NULL, 10);
+        }
+        if (!g_pcap_rx_buf) {
+            g_pcap_rx_buf = heap_caps_malloc(PCAP_RX_MAX, MALLOC_CAP_SPIRAM);
+        }
+        g_pcap_rx_active = (g_pcap_rx_buf && g_pcap_rx_name[0] &&
+                            g_pcap_rx_expected > 0 && g_pcap_rx_expected <= PCAP_RX_MAX);
+        return true;
+    }
+    if (strncmp(line, "[PCAPD]", 7) == 0) {
+        if (g_pcap_rx_active && g_pcap_rx_buf) {
+            int got = pcap_b64_decode_line(line + 7, g_pcap_rx_buf + g_pcap_rx_len,
+                                           PCAP_RX_MAX - g_pcap_rx_len);
+            if (got < 0) {
+                g_pcap_rx_active = false;
+            } else {
+                for (int i = 0; i < got; i++) g_pcap_rx_sum += g_pcap_rx_buf[g_pcap_rx_len + i];
+                g_pcap_rx_len += (size_t)got;
+            }
+        }
+        return true;
+    }
+    if (strncmp(line, "[PCAPX-END", 10) == 0) {
+        bool ok = g_pcap_rx_active && g_pcap_rx_len == g_pcap_rx_expected;
+        const char *sp = strstr(line, "sum=");
+        if (ok && sp) {
+            uint32_t want = (uint32_t)strtoul(sp + 4, NULL, 16);
+            if (want != g_pcap_rx_sum) ok = false;
+        }
+        if (ok) {
+            struct stat st = {0};
+            if (stat("/sdcard/lab/handshakes", &st) == -1) {
+                mkdir("/sdcard/lab", 0777);
+                mkdir("/sdcard/lab/handshakes", 0777);
+            }
+            char path[220];
+            snprintf(path, sizeof(path), "/sdcard/lab/handshakes/%s", g_pcap_rx_name);
+            /* Never overwrite an existing capture: if the name collides (e.g. the
+             * C5 reused a filename), insert _1, _2, ... before the extension until
+             * a free path is found. */
+            struct stat pst;
+            if (stat(path, &pst) == 0) {
+                char stem[168];
+                snprintf(stem, sizeof(stem), "%s", g_pcap_rx_name);
+                char suffix[12] = "";
+                char *ext = strrchr(stem, '.');
+                if (ext) { snprintf(suffix, sizeof(suffix), "%s", ext); *ext = '\0'; }
+                for (int n = 1; n < 1000; n++) {
+                    snprintf(path, sizeof(path), "/sdcard/lab/handshakes/%s_%d%s", stem, n, suffix);
+                    if (stat(path, &pst) != 0) break;
+                }
+            }
+            FILE *f = fopen(path, "wb");
+            if (f) {
+                fwrite(g_pcap_rx_buf, 1, g_pcap_rx_len, f);
+                fclose(f);
+                ESP_LOGI(TAG, "[PCAP-RX] saved %s (%u bytes)", path, (unsigned)g_pcap_rx_len);
+            } else {
+                ESP_LOGW(TAG, "[PCAP-RX] could not open %s for write", path);
+            }
+        } else {
+            ESP_LOGW(TAG, "[PCAP-RX] discarded '%s' (%u/%u bytes)", g_pcap_rx_name,
+                     (unsigned)g_pcap_rx_len, (unsigned)g_pcap_rx_expected);
+        }
+        g_pcap_rx_active = false;
+        return true;
+    }
+    return false;
+}
+
 static void handshaker_monitor_task(void *arg)
 {
     // Get context passed to task (so we use correct ctx even if tab changes)
@@ -13614,6 +14047,13 @@ static void handshaker_monitor_task(void *arg)
                     if (line_pos > 0) {
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "Handshaker UART: %s", line_buffer);
+
+                        // A streamed PCAP (board has no SD) is reassembled + saved
+                        // to our /sdcard; those frame lines are not normal messages.
+                        if (handshaker_handle_pcap_line(line_buffer)) {
+                            line_pos = 0;
+                            continue;
+                        }
 
                         // Determine message type and log it
                         hs_log_type_t log_type = HS_LOG_PROGRESS;
@@ -14118,6 +14558,12 @@ static void arp_poison_back_cb(lv_event_t *e)
     arp_auto_mode = false;
 
     if (arp_poison_page) {
+        // Release the A164 group if the password field held it (see
+        // arp_password_input_cb) before the field is destroyed.
+        if (s_a164_ta == arp_password_input) {
+            s_a164_ta = NULL;
+            a164_kbd_route_to(NULL);
+        }
         lv_obj_del(arp_poison_page);
         arp_poison_page = NULL;
         if (ctx) {
@@ -14170,9 +14616,17 @@ static void arp_keyboard_cb(lv_event_t *e)
 static void arp_password_input_cb(lv_event_t *e)
 {
     (void)e;
-    if (arp_keyboard) {
+    if (!arp_password_input) return;
+    if (a164_kbd_present()) {
+        // Same overlay-vs-nav-group gap as the MITM popup (see
+        // mitm_password_input_cb): this page is never current_visible_page, so
+        // route the A164 straight at the field instead of relying on app_kb_bind.
+        if (arp_keyboard) lv_obj_add_flag(arp_keyboard, LV_OBJ_FLAG_HIDDEN);
+        s_a164_ta = arp_password_input;
+        a164_kbd_route_to(arp_password_input);
+    } else if (arp_keyboard) {
         lv_obj_clear_flag(arp_keyboard, LV_OBJ_FLAG_HIDDEN);
-        lv_keyboard_set_textarea(arp_keyboard, arp_password_input);
+        app_kb_bind(arp_keyboard, arp_password_input);
     }
 }
 
@@ -14265,6 +14719,8 @@ static void arp_connect_cb(lv_event_t *e)
     if (success) {
         ESP_LOGI(TAG, "ARP Poison: Connected to %s", arp_target_ssid);
         arp_wifi_connected = true;
+        // Remember the working password so this network pre-fills next time.
+        if (password && password[0]) wifi_saved_put(arp_target_ssid, password);
 
         if (arp_status_label) {
             lv_label_set_text_fmt(arp_status_label, "Connected to %s", arp_target_ssid);
@@ -14660,12 +15116,31 @@ static void nmap_keyboard_cb(lv_event_t *e)
     }
 }
 
+// Enter/OK (READY) in the nmap password field advances the flow -- fire the
+// Connect button, exactly like tapping it. Esc (CANCEL) just leaves the field.
+// Both release it from the A164 group so arrow keys navigate the page again.
+static void nmap_a164_exit_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (s_a164_ta == nmap_password_input) { s_a164_ta = NULL; a164_kbd_route_to(NULL); }
+    if (code == LV_EVENT_READY && nmap_connect_btn && lv_obj_is_valid(nmap_connect_btn) &&
+        !lv_obj_has_state(nmap_connect_btn, LV_STATE_DISABLED)) {
+        lv_obj_send_event(nmap_connect_btn, LV_EVENT_CLICKED, NULL);
+    }
+}
+
 static void nmap_password_input_cb(lv_event_t *e)
 {
     (void)e;
     if (nmap_keyboard) {
-        lv_obj_clear_flag(nmap_keyboard, LV_OBJ_FLAG_HIDDEN);
-        lv_keyboard_set_textarea(nmap_keyboard, nmap_password_input);
+        if (a164_kbd_present()) {
+            // Physical A164 connected: type on it, keep the touch keyboard hidden.
+            lv_obj_add_flag(nmap_keyboard, LV_OBJ_FLAG_HIDDEN);
+            s_a164_ta = nmap_password_input;
+        } else {
+            lv_obj_clear_flag(nmap_keyboard, LV_OBJ_FLAG_HIDDEN);
+        }
+        app_kb_bind(nmap_keyboard, nmap_password_input);
     }
 }
 
@@ -14673,6 +15148,12 @@ static void nmap_back_cb(lv_event_t *e)
 {
     (void)e;
     ESP_LOGI(TAG, "Nmap: back button pressed");
+
+    // Release the A164 group if the password field held it, so nav resumes.
+    if (s_a164_ta == nmap_password_input) {
+        s_a164_ta = NULL;
+        a164_kbd_route_to(NULL);
+    }
 
     if (nmap_scanning) {
         nmap_scanning = false;
@@ -14806,6 +15287,8 @@ static void nmap_connect_cb(lv_event_t *e)
     if (success) {
         ESP_LOGI(TAG, "Nmap: Connected to %s", nmap_target_ssid);
         nmap_wifi_connected = true;
+        // Remember the working password so this network pre-fills next time.
+        if (password && password[0]) wifi_saved_put(nmap_target_ssid, password);
 
         if (nmap_status_label) {
             lv_label_set_text_fmt(nmap_status_label, "Connected to %s", nmap_target_ssid);
@@ -15190,12 +15673,21 @@ static void nmap_scan_task_fn(void *arg)
     nmap_host_t *results = nmap_hosts_data;
     int result_count = 0;
 
-    int timeout_ms = 300000;
-    int elapsed_ms = 0;
+    // Time out on silence, not on total scan time: an "all hosts" scan of a busy
+    // /24 can legitimately run for many minutes, but JanOS emits a progress line
+    // at least every ~1.5 s while scanning ports (every ~8 s during host
+    // discovery). Reset the stall counter whenever bytes arrive so we only bail
+    // when the board has genuinely gone quiet (crash/hang), while a large but
+    // healthy scan runs to completion. A generous absolute cap is the backstop.
+    const int stall_timeout_ms = 45000;    // no RX for this long -> assume stalled
+    const int abs_timeout_ms   = 1800000;  // 30 min hard backstop
+    int elapsed_ms = 0;   // silence accumulator, reset on any RX
+    int total_ms   = 0;   // absolute-cap accumulator
 
-    while (nmap_scanning && elapsed_ms < timeout_ms) {
+    while (nmap_scanning && elapsed_ms < stall_timeout_ms && total_ms < abs_timeout_ms) {
         int len = transport_read_bytes(uart_port, rx_buffer, sizeof(rx_buffer) - 1, pdMS_TO_TICKS(200));
         if (len > 0) {
+            elapsed_ms = 0;
             rx_buffer[len] = '\0';
 
             for (int i = 0; i < len && nmap_scanning; i++) {
@@ -15359,13 +15851,15 @@ static void nmap_scan_task_fn(void *arg)
             }
         }
         elapsed_ms += 200;
+        total_ms   += 200;
     }
 
     if (nmap_scanning) {
         nmap_scanning = false;
         if (bsp_display_lock(0)) {
             if (ctx && ctx->nmap_progress_label) {
-                lv_label_set_text(ctx->nmap_progress_label, "Scan timed out");
+                lv_label_set_text(ctx->nmap_progress_label,
+                    total_ms >= abs_timeout_ms ? "Scan timed out" : "Scan stalled (no response)");
                 lv_obj_set_style_text_color(ctx->nmap_progress_label, COLOR_MATERIAL_RED, 0);
             }
             bsp_display_unlock();
@@ -15716,6 +16210,14 @@ static void show_nmap_page(void)
         lv_obj_set_style_border_width(nmap_password_input, 1, 0);
         lv_obj_set_style_text_color(nmap_password_input, lv_color_hex(0xFFFFFF), 0);
         lv_obj_add_event_cb(nmap_password_input, nmap_password_input_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(nmap_password_input, nmap_a164_exit_cb, LV_EVENT_READY, NULL);
+        lv_obj_add_event_cb(nmap_password_input, nmap_a164_exit_cb, LV_EVENT_CANCEL, NULL);
+
+        // Pre-fill a remembered password for this network (Tab5 saved store).
+        if (nmap_target_password[0] == '\0') {
+            const char *sp = wifi_saved_get(nmap_target_ssid);
+            if (sp) lv_textarea_set_text(nmap_password_input, sp);
+        }
 
         lv_obj_t *btn_row = lv_obj_create(pass_section);
         lv_obj_set_size(btn_row, lv_pct(100), LV_SIZE_CONTENT);
@@ -15823,6 +16325,14 @@ static void show_nmap_page(void)
         lv_obj_set_style_border_width(nmap_password_input, 1, 0);
         lv_obj_set_style_text_color(nmap_password_input, lv_color_hex(0xFFFFFF), 0);
         lv_obj_add_event_cb(nmap_password_input, nmap_password_input_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_event_cb(nmap_password_input, nmap_a164_exit_cb, LV_EVENT_READY, NULL);
+        lv_obj_add_event_cb(nmap_password_input, nmap_a164_exit_cb, LV_EVENT_CANCEL, NULL);
+
+        // Pre-fill a remembered password for this network (Tab5 saved store).
+        if (nmap_target_password[0] == '\0') {
+            const char *sp = wifi_saved_get(nmap_target_ssid);
+            if (sp) lv_textarea_set_text(nmap_password_input, sp);
+        }
 
         nmap_connect_btn = lv_btn_create(pass_section);
         lv_obj_set_size(nmap_connect_btn, 120, 40);
@@ -16183,12 +16693,20 @@ static void show_arp_poison_page(void)
             lv_obj_set_style_text_color(arp_password_input, lv_color_hex(0xFFFFFF), 0);
             lv_obj_add_event_cb(arp_password_input, arp_password_input_cb, LV_EVENT_CLICKED, NULL);
 
+            // Pre-fill a remembered password for this network (Tab5 saved store).
+            if (arp_target_password[0] == '\0') {
+                const char *sp = wifi_saved_get(arp_target_ssid);
+                if (sp) lv_textarea_set_text(arp_password_input, sp);
+            }
+
             // Connect button
             arp_connect_btn = lv_btn_create(pass_section);
             lv_obj_set_size(arp_connect_btn, 120, 40);
             lv_obj_set_style_bg_color(arp_connect_btn, COLOR_MATERIAL_GREEN, 0);
             lv_obj_set_style_radius(arp_connect_btn, 8, 0);
             lv_obj_add_event_cb(arp_connect_btn, arp_connect_cb, LV_EVENT_CLICKED, NULL);
+            // Enter in the password field fires Connect (A164 physical keyboard).
+            app_kb_submit_bind(arp_password_input, arp_connect_btn);
 
             lv_obj_t *connect_label = lv_label_create(arp_connect_btn);
             lv_label_set_text(connect_label, "Connect");
@@ -16274,7 +16792,7 @@ static void show_arp_poison_page(void)
         lv_obj_set_size(arp_keyboard, lv_pct(100), 260);  // Larger keys
         lv_obj_align(arp_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);  // Pin to bottom
         style_on_screen_keyboard(arp_keyboard);
-        lv_keyboard_set_textarea(arp_keyboard, arp_password_input);
+        app_kb_bind(arp_keyboard, arp_password_input);
         lv_obj_add_event_cb(arp_keyboard, arp_keyboard_cb, LV_EVENT_ALL, NULL);
         lv_obj_add_flag(arp_keyboard, LV_OBJ_FLAG_HIDDEN);
     }
@@ -16883,6 +17401,17 @@ static void karma_monitor_task(void *arg)
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "Karma UART: %s", line_buffer);
 
+                        // A handshake pcap captured while sniffing on the Karma screen is
+                        // streamed [PCAPX] (the C5 has no SD). Reassemble + write it here too;
+                        // without this the KARMA sniffer's handshakes fall through to the text
+                        // parsers and are dropped. Non-[PCAPX] lines return false and continue.
+                        if (handshaker_handle_pcap_line(line_buffer)) { line_pos = 0; continue; }
+
+                        // A streamed file (the C5 has no SD) is reassembled and written to
+                        // our /sdcard; its frame lines are not normal messages. Karma mode
+                        // reroutes lab/eviltwin.txt and lab/portals.txt appends here.
+                        if (subghz_host_recv_file_stream(line_buffer)) { line_pos = 0; continue; }
+
                         // Check for portal started
                         char *ap_name = strstr(line_buffer, "AP Name:");
                         if (ap_name != NULL) {
@@ -17242,6 +17771,11 @@ static void evil_twin_monitor_task(void *arg)
                     if (line_pos > 0) {
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "[%s] Evil Twin: %s", uart_name, line_buffer);
+
+                        // A streamed file (the C5 has no SD) is reassembled and written
+                        // to our /sdcard; its frame lines are not normal messages. The C5
+                        // reroutes lab/eviltwin.txt appends here during evil-twin capture.
+                        if (subghz_host_recv_file_stream(line_buffer)) { line_pos = 0; continue; }
 
                         // Look for client connection: "Client connected - MAC: XX:XX:XX:XX:XX:XX"
                         char *client_connected = strstr(line_buffer, "Client connected - MAC:");
@@ -17817,12 +18351,9 @@ static void update_subghz_tile_visibility(tab_context_t *ctx)
         return;
     }
 
-    // If the tile exists, ensure it matches the current capability flag.
-    if (ctx->has_subghz) {
-        lv_obj_clear_flag(ctx->subghz_tile, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(ctx->subghz_tile, LV_OBJ_FLAG_HIDDEN);
-    }
+    // The Radios tile is always visible now (keeps the home grid at 10 tiles);
+    // radio availability is surfaced inside the Radios submenu instead.
+    lv_obj_clear_flag(ctx->subghz_tile, LV_OBJ_FLAG_HIDDEN);
 }
 
 // Create tiles for UART tabs inside given container
@@ -17885,18 +18416,40 @@ static void create_uart_tiles_in_container(lv_obj_t *container, tab_context_t *c
         enable_red_team ? "Global WiFi\nAttacks" : "Global WiFi\nTests",
         COLOR_MATERIAL_RED, main_tile_event_cb, "Global WiFi Attacks");
     create_tile(tile_grid, LV_SYMBOL_SAVE, "Compromised\nData", COLOR_MATERIAL_GREEN, main_tile_event_cb, "Compromised Data");
-    create_tile(tile_grid, LV_SYMBOL_EYE_OPEN, "Deauth\nDetector", COLOR_MATERIAL_AMBER, main_tile_event_cb, "Deauth Detector");
+    create_tile(tile_grid, LV_SYMBOL_EYE_OPEN, "Detectors", COLOR_MATERIAL_AMBER, main_tile_event_cb, "Detectors");
     create_tile(tile_grid, LV_SYMBOL_BLUETOOTH, "Bluetooth", COLOR_MATERIAL_CYAN, main_tile_event_cb, "Bluetooth");
     create_tile(tile_grid, LV_SYMBOL_LOOP, "Network\nObserver", COLOR_MATERIAL_TEAL, main_tile_event_cb, "Network Observer");
     create_tile(tile_grid, LV_SYMBOL_WIFI, "Karma", COLOR_MATERIAL_ORANGE, main_tile_event_cb, "Karma");
     create_tile(tile_grid, LV_SYMBOL_GPS, "Wardrive", COLOR_MATERIAL_TEAL, main_tile_event_cb, "Wardrive");
-    create_tile(tile_grid, LV_SYMBOL_EYE_OPEN, "Anti-Surv", COLOR_MATERIAL_PINK, main_tile_event_cb, "Anti-Surv");
     create_tile(tile_grid, LV_SYMBOL_BARS, "Mesh\nRecon", COLOR_MATERIAL_PURPLE, main_tile_event_cb, "IoT");
-    if (ctx && ctx->has_subghz) {
-        ctx->subghz_tile = create_tile(tile_grid, LV_SYMBOL_BARS, "Sub-GHz",
-                                       COLOR_MATERIAL_PINK, main_tile_event_cb, "Sub-GHz");
-    } else if (ctx) {
-        ctx->subghz_tile = NULL;
+    if (ctx) {
+        // Radios is always shown so the home grid stays at 10 tiles; the submenu
+        // itself surfaces Sub-GHz / nRF24 availability when tapped.
+        ctx->subghz_tile = create_tile(tile_grid, LV_SYMBOL_BARS, "Radios",
+                                       COLOR_MATERIAL_PINK, main_tile_event_cb, "Radios");
+    }
+
+    // In landscape the wide aspect leaves the fixed-size tiles floating with empty
+    // space; lay them out as a 5x2 grid that stretches to fill the tile area.
+    // Portrait keeps the wrapping layout (it already fits the tall aspect well).
+    {
+        uint32_t tile_n = lv_obj_get_child_count(tile_grid);
+        if (ui_wide_layout() && tile_n == 10) {
+            static const int32_t col5[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
+                                           LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
+            static const int32_t row2[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
+            lv_obj_set_style_pad_row(tile_grid, tile_gap, 0);
+            lv_obj_set_style_pad_column(tile_grid, tile_gap, 0);
+            lv_obj_set_style_pad_top(tile_grid, 8, 0);
+            lv_obj_set_style_pad_bottom(tile_grid, 8, 0);
+            lv_obj_set_grid_dsc_array(tile_grid, col5, row2);
+            lv_obj_set_layout(tile_grid, LV_LAYOUT_GRID);
+            for (uint32_t i = 0; i < tile_n; i++) {
+                lv_obj_t *t = lv_obj_get_child(tile_grid, i);
+                lv_obj_set_grid_cell(t, LV_GRID_ALIGN_STRETCH, (int32_t)(i % 5), 1,
+                                     LV_GRID_ALIGN_STRETCH, (int32_t)(i / 5), 1);
+            }
+        }
     }
 
     if (dashboard_enabled) {
@@ -22162,7 +22715,11 @@ static bool current_tab_has_sd_card(void)
     if (tab_is_internal(current_tab)) {
         return internal_sd_present;
     }
-    return ctx->sd_card_present;
+    // Fall back to the Tab5's own SD. The SD-gated features (captive-portal HTML,
+    // wardrive logs, handshakes) are stored on the Tab5's /sdcard, so an attached
+    // board that has no card of its own (e.g. a DIY MonsterC5) can still use the
+    // Tab5's card instead of being told "no SD card".
+    return ctx->sd_card_present || internal_sd_present;
 }
 
 // Close SD warning popup
@@ -22703,6 +23260,15 @@ static void global_handshaker_monitor_task(void *arg)
                     if (line_pos > 0) {
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "Global Handshaker UART: %s", line_buffer);
+
+                        // A streamed PCAP (board has no SD) is reassembled + saved
+                        // here too. Without this, the global "attack all" sweep
+                        // captured handshakes but NEVER wrote them -- the frame
+                        // lines fell through to the text parsers and were dropped.
+                        if (handshaker_handle_pcap_line(line_buffer)) {
+                            line_pos = 0;
+                            continue;
+                        }
 
                         // Determine message type and log it
                         hs_log_type_t log_type = HS_LOG_PROGRESS;
@@ -23336,6 +23902,11 @@ static void phishing_portal_monitor_task(void *arg)
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "Portal monitor line: %s", line_buffer);
 
+                        // A streamed file (the C5 has no SD) is reassembled and written to
+                        // our /sdcard; its frame lines are not normal messages. The portal
+                        // reroutes lab/portals.txt appends and loot/portal/... files here.
+                        if (subghz_host_recv_file_stream(line_buffer)) { line_pos = 0; continue; }
+
                         // Check for password/form data capture
                         // Pattern: "Received POST data: ..." or "Portal password received: ..." or "Password: ..."
                         char *post_ptr = strstr(line_buffer, "Received POST data:");
@@ -23543,7 +24114,7 @@ static void phishing_portal_keyboard_cb(lv_event_t *e)
     if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
         lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
         if (ctx && ctx->phishing_portal_ssid_textarea) {
-            lv_keyboard_set_textarea(kb, ctx->phishing_portal_ssid_textarea);
+            app_kb_bind(kb, ctx->phishing_portal_ssid_textarea);
         }
     }
 }
@@ -23557,7 +24128,7 @@ static void phishing_portal_textarea_focus_cb(lv_event_t *e)
 
     if (code == LV_EVENT_FOCUSED) {
         if (ctx && ctx->phishing_portal_keyboard) {
-            lv_keyboard_set_textarea(ctx->phishing_portal_keyboard, ctx->phishing_portal_ssid_textarea);
+            app_kb_bind(ctx->phishing_portal_keyboard, ctx->phishing_portal_ssid_textarea);
             lv_obj_clear_flag(ctx->phishing_portal_keyboard, LV_OBJ_FLAG_HIDDEN);
         }
     } else if (code == LV_EVENT_DEFOCUSED) {
@@ -23700,7 +24271,7 @@ static void show_phishing_portal_popup(void)
     lv_obj_set_size(ctx->phishing_portal_keyboard, lv_pct(100), 260);  // Larger keys
     lv_obj_align(ctx->phishing_portal_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     style_on_screen_keyboard(ctx->phishing_portal_keyboard);
-    lv_keyboard_set_textarea(ctx->phishing_portal_keyboard, ctx->phishing_portal_ssid_textarea);
+    app_kb_bind(ctx->phishing_portal_keyboard, ctx->phishing_portal_ssid_textarea);
     lv_obj_add_event_cb(ctx->phishing_portal_keyboard, phishing_portal_keyboard_cb, LV_EVENT_ALL, ctx);
     lv_obj_add_flag(ctx->phishing_portal_keyboard, LV_OBJ_FLAG_HIDDEN);
 }
@@ -25998,7 +26569,7 @@ static void wardrive_wigle_text_input_cb(lv_event_t *e)
     lv_obj_t *ta = lv_event_get_target(e);
     lv_textarea_set_placeholder_text(ta, "");
     lv_obj_clear_flag(ctx->wardrive_wigle_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_keyboard_set_textarea(ctx->wardrive_wigle_keyboard, ta);
+    app_kb_bind(ctx->wardrive_wigle_keyboard, ta);
 }
 
 static void wardrive_wigle_keyboard_cb(lv_event_t *e)
@@ -26180,7 +26751,7 @@ static void wardrive_wigle_create_credentials_prompt(tab_context_t *ctx, bool wi
     lv_obj_add_flag(ctx->wardrive_wigle_keyboard, LV_OBJ_FLAG_FLOATING);
     lv_obj_align(ctx->wardrive_wigle_keyboard, LV_ALIGN_BOTTOM_MID, 0, -8);
     style_on_screen_keyboard(ctx->wardrive_wigle_keyboard);
-    lv_keyboard_set_textarea(ctx->wardrive_wigle_keyboard,
+    app_kb_bind(ctx->wardrive_wigle_keyboard,
                              with_ssid ? ctx->wardrive_wigle_ssid_input : ctx->wardrive_wigle_password_input);
     lv_obj_add_event_cb(ctx->wardrive_wigle_keyboard, wardrive_wigle_keyboard_cb, LV_EVENT_ALL, NULL);
     lv_obj_add_flag(ctx->wardrive_wigle_keyboard, LV_OBJ_FLAG_HIDDEN);
@@ -28735,7 +29306,7 @@ static void home_mgmt_ta_focus_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (!ctx || !ctx->home_mgmt_keyboard) return;
     if (code == LV_EVENT_FOCUSED) {
-        lv_keyboard_set_textarea(ctx->home_mgmt_keyboard, ta);
+        app_kb_bind(ctx->home_mgmt_keyboard, ta);
         lv_obj_clear_flag(ctx->home_mgmt_keyboard, LV_OBJ_FLAG_HIDDEN);
     } else if (code == LV_EVENT_DEFOCUSED || code == LV_EVENT_READY) {
         lv_obj_add_flag(ctx->home_mgmt_keyboard, LV_OBJ_FLAG_HIDDEN);
@@ -29881,6 +30452,13 @@ static void wardrive_monitor_task(void *arg)
                     if (line_pos > 0) {
                         line_buffer[line_pos] = '\0';
 
+                        // A streamed file (the C5 has no SD) is reassembled and written to
+                        // our /sdcard; its [FILEA]/[FILEX] frame lines are not normal wardrive
+                        // output. The C5 reroutes the wardrive CSV log (w*.log / *_track CSV)
+                        // and the _track KML here. Plain CSV rows (the live BT/Wi-Fi feed) do
+                        // not match a frame prefix, so they fall through to the parser below.
+                        if (subghz_host_recv_file_stream(line_buffer)) { line_pos = 0; continue; }
+
                         // Tab-side GPS read request from remote CLI
                         if (wardrive_is_tab_gps_read_command(line_buffer)) {
                             wardrive_reply_tab_gps_read(active_tab, uart_port);
@@ -30612,7 +31190,7 @@ static void wardrive_setup_ta_focus_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (!ctx || !ctx->wardrive_setup_keyboard) return;
     if (code == LV_EVENT_FOCUSED) {
-        lv_keyboard_set_textarea(ctx->wardrive_setup_keyboard, ta);
+        app_kb_bind(ctx->wardrive_setup_keyboard, ta);
         lv_obj_clear_flag(ctx->wardrive_setup_keyboard, LV_OBJ_FLAG_HIDDEN);
     } else if (code == LV_EVENT_DEFOCUSED || code == LV_EVENT_READY) {
         lv_obj_add_flag(ctx->wardrive_setup_keyboard, LV_OBJ_FLAG_HIDDEN);
@@ -31997,7 +32575,7 @@ static void wardrive_blacklist_ta_focus_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (!ctx || !ctx->wardrive_blacklist_keyboard) return;
     if (code == LV_EVENT_FOCUSED) {
-        lv_keyboard_set_textarea(ctx->wardrive_blacklist_keyboard, ta);
+        app_kb_bind(ctx->wardrive_blacklist_keyboard, ta);
         lv_obj_clear_flag(ctx->wardrive_blacklist_keyboard, LV_OBJ_FLAG_HIDDEN);
     } else if (code == LV_EVENT_DEFOCUSED || code == LV_EVENT_READY) {
         lv_obj_add_flag(ctx->wardrive_blacklist_keyboard, LV_OBJ_FLAG_HIDDEN);
@@ -34490,7 +35068,7 @@ static bool compromised_extract_sized_file_entry(const char *line, char *out, si
 
 static int compromised_load_handshake_files(tab_context_t *ctx, tab_id_t active_tab, uart_port_t uart_port)
 {
-    if (!ctx || tab_is_internal(active_tab)) {
+    if (!ctx) {
         return 0;
     }
 
@@ -34503,6 +35081,28 @@ static int compromised_load_handshake_files(tab_context_t *ctx, tab_id_t active_
     static const char *exts[] = { ".pcap" };
 
     compromised_listing_reset_files(ctx);
+
+    // Handshakes the board streamed to us (it has no SD of its own) are saved on
+    // the Tab5's own /sdcard. List those first so they show regardless of tab.
+    {
+        DIR *ld = opendir("/sdcard/lab/handshakes");
+        if (ld) {
+            struct dirent *lent;
+            while ((lent = readdir(ld)) != NULL &&
+                   ctx->wardrive_wigle_file_count < WARDRIVE_WIGLE_MAX_FILES) {
+                if (strstr(lent->d_name, ".pcap") != NULL) {
+                    wardrive_wigle_store_file(ctx, "/sdcard/lab/handshakes", lent->d_name);
+                }
+            }
+            closedir(ld);
+        }
+    }
+
+    // Internal tab has no board to query; and if we already got captures locally,
+    // there's no need to ask the board's (absent) card.
+    if (tab_is_internal(active_tab) || ctx->wardrive_wigle_file_count > 0) {
+        return ctx->wardrive_wigle_file_count;
+    }
 
     bool usb_lock_set = false;
     compromised_transport_lock_begin(active_tab, uart_port, &usb_lock_set);
@@ -37945,7 +38545,7 @@ static void rogue_ap_password_focus_cb(lv_event_t *e)
     tab_context_t *ctx = get_current_ctx();
     if (ctx && ctx->rogue_ap_keyboard) {
         lv_obj_clear_flag(ctx->rogue_ap_keyboard, LV_OBJ_FLAG_HIDDEN);
-        lv_keyboard_set_textarea(ctx->rogue_ap_keyboard, ta);
+        app_kb_bind(ctx->rogue_ap_keyboard, ta);
     }
 }
 
@@ -37987,6 +38587,11 @@ static void rogue_ap_monitor_task(void *arg)
                     if (line_pos > 0) {
                         line_buffer[line_pos] = '\0';
                         ESP_LOGI(TAG, "[%s] RogueAP: %s", uart_name, line_buffer);
+
+                        // A streamed file (the C5 has no SD) is reassembled and written to
+                        // our /sdcard; its frame lines are not normal messages. Rogue AP
+                        // reroutes lab/eviltwin.txt and lab/portals.txt appends here.
+                        if (subghz_host_recv_file_stream(line_buffer)) { line_pos = 0; continue; }
 
                         // Parse memory info: "[MEM] start_rogueap: Internal=200/257KB, DMA=185/241KB, PSRAM=7436/8192KB"
                         // Parse client connections: "AP: Client connected - MAC: XX:XX:XX:XX:XX:XX"
@@ -38491,7 +39096,7 @@ static void show_rogue_ap_page(void)
         lv_obj_set_size(ctx->rogue_ap_keyboard, lv_pct(100), 260);
         lv_obj_align(ctx->rogue_ap_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
         style_on_screen_keyboard(ctx->rogue_ap_keyboard);
-        lv_keyboard_set_textarea(ctx->rogue_ap_keyboard, ctx->rogue_ap_password_input);
+        app_kb_bind(ctx->rogue_ap_keyboard, ctx->rogue_ap_password_input);
         lv_obj_add_flag(ctx->rogue_ap_keyboard, LV_OBJ_FLAG_HIDDEN);
 
         // Add event handler to show keyboard when textarea is clicked
@@ -40657,7 +41262,7 @@ static void wpasec_text_input_cb(lv_event_t *e)
     lv_obj_t *ta = lv_event_get_target(e);
     lv_textarea_set_placeholder_text(ta, "");
     lv_obj_clear_flag(ctx->wpasec_keyboard, LV_OBJ_FLAG_HIDDEN);
-    lv_keyboard_set_textarea(ctx->wpasec_keyboard, ta);
+    app_kb_bind(ctx->wpasec_keyboard, ta);
 }
 
 // Keyboard ready/cancel - hide keyboard
@@ -40808,7 +41413,7 @@ static void wpasec_create_credentials_prompt(tab_context_t *ctx, bool with_ssid)
     lv_obj_set_size(ctx->wpasec_keyboard, lv_pct(100), 260);
     lv_obj_align(ctx->wpasec_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     style_on_screen_keyboard(ctx->wpasec_keyboard);
-    lv_keyboard_set_textarea(ctx->wpasec_keyboard, with_ssid ? ssid_input : ctx->wpasec_password_input);
+    app_kb_bind(ctx->wpasec_keyboard, with_ssid ? ssid_input : ctx->wpasec_password_input);
     lv_obj_add_event_cb(ctx->wpasec_keyboard, wpasec_keyboard_cb, LV_EVENT_ALL, NULL);
     lv_obj_add_flag(ctx->wpasec_keyboard, LV_OBJ_FLAG_HIDDEN);
 }
@@ -48452,13 +49057,7 @@ static void show_bluetooth_menu_page(void)
     create_tile(tiles, LV_SYMBOL_BLUETOOTH, "BT Scan\n& Locate",
                 ui_tab_icon_color(),
                 bt_menu_tile_event_cb, "BT Scan & Locate");
-    // Jammer needs the MonsterRF/Sub-GHz (nRF24) module - show only when detected,
-    // mirroring the Sub-GHz tile gating in the main menu.
-    if (ctx && ctx->has_subghz) {
-        create_tile(tiles, LV_SYMBOL_WARNING, "Jammer",
-                    COLOR_MATERIAL_RED,
-                    bt_menu_tile_event_cb, "Jammer");
-    }
+    // (The nRF24 Jammer moved to the "Radios" group tile on the home screen.)
 
     // Set current visible page
     ctx->current_visible_page = ctx->bt_menu_page;
@@ -48729,7 +49328,7 @@ static void jammer_style_band_btn(lv_obj_t *btn, bool selected)
 // Set band buttons enabled/disabled (locked while jamming)
 static void jammer_set_bands_enabled(bool enabled)
 {
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
         if (!bt_jammer_band_btns[i]) continue;
         if (enabled) {
             lv_obj_clear_state(bt_jammer_band_btns[i], LV_STATE_DISABLED);
@@ -48893,10 +49492,10 @@ static void jammer_band_event_cb(lv_event_t *e)
     if (ctx && ctx->bt_jamming) return;
 
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    if (idx < 0 || idx >= 5) return;
+    if (idx < 0 || idx >= 7) return;
 
     bt_jammer_band = idx;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
         jammer_style_band_btn(bt_jammer_band_btns[i], i == idx);
     }
 }
@@ -48993,9 +49592,14 @@ static void jammer_back_btn_event_cb(lv_event_t *e)
         lv_obj_add_flag(ctx->bt_jammer_page, LV_OBJ_FLAG_HIDDEN);
     }
 
-    if (ctx && ctx->bt_menu_page) {
-        lv_obj_clear_flag(ctx->bt_menu_page, LV_OBJ_FLAG_HIDDEN);
-        ctx->current_visible_page = ctx->bt_menu_page;
+    // The Jammer now lives in the Radios group launched from the home tiles (it
+    // was moved out of the Bluetooth menu), so Back returns to the home tiles --
+    // like the Deauth/Anti-Surv/Sub-GHz pages. Showing bt_menu_page here left the
+    // user on a hidden/blank Bluetooth page, which is why exiting seemed to
+    // require a reset.
+    if (ctx && ctx->tiles) {
+        lv_obj_clear_flag(ctx->tiles, LV_OBJ_FLAG_HIDDEN);
+        ctx->current_visible_page = ctx->tiles;
     }
 }
 
@@ -49103,9 +49707,9 @@ static void show_jammer_page(void)
     lv_obj_set_style_pad_column(band_row, 12, 0);
     lv_obj_clear_flag(band_row, LV_OBJ_FLAG_SCROLLABLE);
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
         lv_obj_t *btn = lv_btn_create(band_row);
-        lv_obj_set_size(btn, 110, 56);
+        lv_obj_set_size(btn, 92, 56);
         lv_obj_set_style_radius(btn, 10, 0);
         jammer_style_band_btn(btn, i == bt_jammer_band);
         lv_obj_add_event_cb(btn, jammer_band_event_cb, LV_EVENT_CLICKED, (void*)(intptr_t)i);
@@ -50606,7 +51210,7 @@ static void beacon_ssids_textarea_focus_cb(lv_event_t *e)
     tab_context_t *ctx = get_current_ctx();
     if (!ctx || !ctx->beacon_ssids_keyboard || !ctx->beacon_ssids_add_textarea) return;
 
-    lv_keyboard_set_textarea(ctx->beacon_ssids_keyboard, ctx->beacon_ssids_add_textarea);
+    app_kb_bind(ctx->beacon_ssids_keyboard, ctx->beacon_ssids_add_textarea);
     lv_obj_clear_flag(ctx->beacon_ssids_keyboard, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -50728,7 +51332,7 @@ static void beacon_ssids_add_new_cb(lv_event_t *e)
     lv_obj_align(ctx->beacon_ssids_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     style_on_screen_keyboard(ctx->beacon_ssids_keyboard);
     lv_obj_set_style_text_font(ctx->beacon_ssids_keyboard, &lv_font_montserrat_16, LV_PART_ITEMS);
-    lv_keyboard_set_textarea(ctx->beacon_ssids_keyboard, ctx->beacon_ssids_add_textarea);
+    app_kb_bind(ctx->beacon_ssids_keyboard, ctx->beacon_ssids_add_textarea);
     lv_obj_add_flag(ctx->beacon_ssids_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(ctx->beacon_ssids_keyboard, beacon_ssids_keyboard_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(ctx->beacon_ssids_keyboard, beacon_ssids_keyboard_cb, LV_EVENT_CANCEL, NULL);
@@ -51213,6 +51817,89 @@ static __attribute__((unused)) lv_obj_t *settings_popup_obj = NULL;
 
 // NVS keys
 #define NVS_NAMESPACE "settings"
+#define NVS_KEY_WIFI_SAVED      "wifi_saved"   // remembered Wi-Fi passwords (blob)
+
+// ---- Remembered Wi-Fi passwords (persisted on the Tab5, keyed by SSID) -------
+// `wifi_connect --saved` only reaches JanOS's own SD files; this lets the Tab5
+// itself remember a password the user typed, so the nmap / MITM / ARP connect
+// fields pre-fill (and connect in one tap) next time. Stored as one NVS blob.
+#define WIFI_SAVED_MAX 32
+typedef struct { char ssid[33]; char password[65]; } wifi_saved_entry_t;
+static wifi_saved_entry_t g_wifi_saved[WIFI_SAVED_MAX];
+static int g_wifi_saved_count = 0;
+
+static void load_wifi_saved_from_nvs(void)
+{
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) != ESP_OK) return;
+    size_t sz = sizeof(g_wifi_saved);
+    memset(g_wifi_saved, 0, sizeof(g_wifi_saved));
+    if (nvs_get_blob(nvs, NVS_KEY_WIFI_SAVED, g_wifi_saved, &sz) == ESP_OK) {
+        g_wifi_saved_count = (int)(sz / sizeof(wifi_saved_entry_t));
+        if (g_wifi_saved_count > WIFI_SAVED_MAX) g_wifi_saved_count = WIFI_SAVED_MAX;
+        if (g_wifi_saved_count < 0) g_wifi_saved_count = 0;
+    } else {
+        g_wifi_saved_count = 0;
+    }
+    nvs_close(nvs);
+    ESP_LOGI(TAG, "Loaded %d remembered Wi-Fi password(s) from NVS", g_wifi_saved_count);
+}
+
+static void save_wifi_saved_to_nvs(void)
+{
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) return;
+    nvs_set_blob(nvs, NVS_KEY_WIFI_SAVED, g_wifi_saved,
+                 (size_t)g_wifi_saved_count * sizeof(wifi_saved_entry_t));
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
+
+// Return a remembered password for an SSID, or NULL if none is stored.
+static const char *wifi_saved_get(const char *ssid)
+{
+    if (!ssid || ssid[0] == '\0') return NULL;
+    for (int i = 0; i < g_wifi_saved_count; i++) {
+        if (strcmp(g_wifi_saved[i].ssid, ssid) == 0 && g_wifi_saved[i].password[0]) {
+            return g_wifi_saved[i].password;
+        }
+    }
+    return NULL;
+}
+
+// Remember (insert or update) a working Wi-Fi password for an SSID. No-op for
+// empty SSID/password or an unchanged entry. Evicts the oldest when full.
+static void wifi_saved_put(const char *ssid, const char *password)
+{
+    if (!ssid || ssid[0] == '\0' || !password || password[0] == '\0') return;
+    if (strlen(ssid) >= sizeof(g_wifi_saved[0].ssid) ||
+        strlen(password) >= sizeof(g_wifi_saved[0].password)) return;
+
+    for (int i = 0; i < g_wifi_saved_count; i++) {
+        if (strcmp(g_wifi_saved[i].ssid, ssid) == 0) {
+            if (strcmp(g_wifi_saved[i].password, password) == 0) return;  // unchanged
+            snprintf(g_wifi_saved[i].password, sizeof(g_wifi_saved[i].password), "%s", password);
+            save_wifi_saved_to_nvs();
+            ESP_LOGI(TAG, "Updated remembered Wi-Fi password for '%s'", ssid);
+            return;
+        }
+    }
+
+    int idx;
+    if (g_wifi_saved_count < WIFI_SAVED_MAX) {
+        idx = g_wifi_saved_count++;
+    } else {
+        memmove(&g_wifi_saved[0], &g_wifi_saved[1],
+                (WIFI_SAVED_MAX - 1) * sizeof(wifi_saved_entry_t));
+        idx = WIFI_SAVED_MAX - 1;
+    }
+    memset(&g_wifi_saved[idx], 0, sizeof(g_wifi_saved[idx]));
+    snprintf(g_wifi_saved[idx].ssid, sizeof(g_wifi_saved[idx].ssid), "%s", ssid);
+    snprintf(g_wifi_saved[idx].password, sizeof(g_wifi_saved[idx].password), "%s", password);
+    save_wifi_saved_to_nvs();
+    ESP_LOGI(TAG, "Remembered Wi-Fi password for '%s' (%d stored)", ssid, g_wifi_saved_count);
+}
+
 #define NVS_KEY_RED_TEAM        "red_team"
 #define NVS_KEY_SCREEN_TIMEOUT  "scr_timeout"
 #define NVS_KEY_SCREEN_BRIGHT   "scr_bright"
@@ -51624,6 +52311,168 @@ static void save_dark_mode_to_nvs(bool enabled)
     }
 }
 
+// The on-screen keyboard most recently bound to a text field. Its visibility is
+// the signal for "text entry active": while it is shown the A164 types into the
+// field; when it is hidden the A164's arrow keys navigate the menus instead.
+static lv_obj_t *s_a164_osk = NULL;
+
+// Bind an on-screen keyboard to a text field AND point the physical A164 keyboard
+// at the same field, so typing on either lands in the active input. This wraps
+// every former lv_keyboard_set_textarea() call site.
+static void app_kb_bind(lv_obj_t *kb, lv_obj_t *ta)
+{
+    lv_keyboard_set_textarea(kb, ta);
+    s_a164_osk = kb;
+    if (a164_kbd_present()) {
+        // Physical A164 attached: keep the on-screen keyboard hidden and leave
+        // the whole page in the nav group so Tab still cycles through every
+        // widget while a field is active. Route typing into the field by
+        // focusing it *within* the existing group -- but only if it is already a
+        // group member (its page is the populated, visible one), so build-time
+        // binds on not-yet-shown pages don't hijack focus.
+        if (kb && lv_obj_is_valid(kb)) {
+            lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+        }
+        s_a164_ta = ta;
+        lv_group_t *g = a164_kbd_group();
+        if (g && ta && lv_obj_is_valid(ta) && lv_obj_get_group(ta) == g) {
+            lv_group_focus_obj(ta);
+        }
+    } else {
+        // Touch path (no A164): unchanged -- the on-screen keyboard drives input
+        // and the A164 group collapses to just this field.
+        a164_kbd_route_to(ta);
+    }
+}
+
+// Enter/OK (READY) in a text field advances the flow by firing an associated
+// action button, exactly like tapping it; Esc (CANCEL) just leaves the field.
+// Both release the A164 field routing so arrow keys navigate the page again.
+// Generalizes nmap_a164_exit_cb; gated on a164_kbd_present() so the touch path
+// is untouched. Wire with app_kb_submit_bind(field, action_btn).
+static void app_kb_submit_cb(lv_event_t *e)
+{
+    if (!a164_kbd_present()) {
+        return; // touch path: behavior identical to before (no submit-on-Enter)
+    }
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *field = lv_event_get_target(e);
+    lv_obj_t *btn = (lv_obj_t *)lv_event_get_user_data(e);
+
+    // Release the field so the nav timer repopulates the page and resumes nav.
+    if (s_a164_ta == field) {
+        s_a164_ta = NULL;
+    }
+    a164_kbd_route_to(NULL);
+
+    if (code == LV_EVENT_READY && btn && lv_obj_is_valid(btn) &&
+        !lv_obj_has_state(btn, LV_STATE_DISABLED)) {
+        lv_obj_send_event(btn, LV_EVENT_CLICKED, NULL);
+    }
+}
+
+static void app_kb_submit_bind(lv_obj_t *field, lv_obj_t *action_btn)
+{
+    if (!field || !action_btn) {
+        return;
+    }
+    lv_obj_add_event_cb(field, app_kb_submit_cb, LV_EVENT_READY, action_btn);
+    lv_obj_add_event_cb(field, app_kb_submit_cb, LV_EVENT_CANCEL, action_btn);
+}
+
+// ---- A164 physical-keyboard menu navigation --------------------------------
+// When no on-screen keyboard is active, put the current page's clickable widgets
+// into the A164 keypad group so its arrow keys move focus (with a visible
+// outline) and Enter activates the focused item. An LVGL timer keeps the group
+// pointed at whatever page is currently visible.
+static lv_obj_t *s_a164_nav_page = NULL;
+static lv_style_t s_a164_focus_style;
+
+static void a164_nav_add_focusables(lv_obj_t *cont, lv_group_t *g)
+{
+    uint32_t n = lv_obj_get_child_count(cont);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t *child = lv_obj_get_child(cont, i);
+        if (lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN)) continue;
+        if (lv_obj_has_flag(child, LV_OBJ_FLAG_CLICKABLE)) {
+            lv_group_add_obj(g, child);
+            if (!lv_obj_has_flag(child, LV_OBJ_FLAG_USER_1)) {
+                lv_obj_add_style(child, &s_a164_focus_style, LV_STATE_FOCUSED);
+                lv_obj_add_flag(child, LV_OBJ_FLAG_USER_1);
+            }
+        }
+        a164_nav_add_focusables(child, g); // recurse into nested containers
+    }
+}
+
+static void a164_nav_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    lv_group_t *g = a164_kbd_group();
+    if (!g) return;
+
+    // Typing mode: (touch) while a bound on-screen keyboard is visible, OR (A164
+    // present) whenever the focused group object is a textarea. Deriving it from
+    // "focused widget is a text field" is what lets Tab move between fields and
+    // buttons: on a field, arrows are cursor keys and Enter fires its action; on
+    // a button, arrows navigate (NEXT/PREV) and Enter activates it.
+    lv_obj_t *foc = lv_group_get_focused(g);
+    bool osk_visible = (s_a164_osk && lv_obj_is_valid(s_a164_osk) &&
+                        !lv_obj_has_flag(s_a164_osk, LV_OBJ_FLAG_HIDDEN));
+    bool field_typing = (a164_kbd_present() && foc && lv_obj_is_valid(foc) &&
+                         lv_obj_check_type(foc, &lv_textarea_class));
+    a164_kbd_set_nav_mode(!(osk_visible || field_typing));
+
+    // Touch path (A164 absent): keep the original behavior exactly -- while the
+    // on-screen keyboard is up don't repopulate; force a repopulate once it
+    // hides, focusing the first widget.
+    if (!a164_kbd_present()) {
+        if (osk_visible) {
+            s_a164_nav_page = NULL; // force a repopulate once typing ends
+            return;
+        }
+        lv_obj_t *page = get_current_ctx()->current_visible_page;
+        if (!page || page == s_a164_nav_page) return; // unchanged since last populate
+        lv_group_remove_all_objs(g);
+        a164_nav_add_focusables(page, g);
+        if (lv_group_get_obj_count(g) > 0) {
+            lv_group_focus_obj(lv_group_get_obj_by_index(g, 0));
+        }
+        s_a164_nav_page = page;
+        return;
+    }
+
+    // A164 present: keep the group populated with the *whole* page so Tab cycles
+    // through every focusable (fields and buttons alike), even while a field is
+    // focused. Repopulate only when the visible page changes or the group was
+    // emptied (e.g. a field released via a164_kbd_route_to(NULL) after Enter/Esc)
+    // -- never on a stable page, so we don't steal focus from an active field.
+    // When repopulating, keep the currently-focused widget if it survives on the
+    // new page; otherwise focus the first one.
+    lv_obj_t *page = get_current_ctx()->current_visible_page;
+    if (page && (page != s_a164_nav_page || lv_group_get_obj_count(g) == 0)) {
+        lv_obj_t *keep = foc;
+        lv_group_remove_all_objs(g);
+        a164_nav_add_focusables(page, g);
+        if (keep && lv_obj_is_valid(keep) && lv_obj_get_group(keep) == g) {
+            lv_group_focus_obj(keep);
+        } else if (lv_group_get_obj_count(g) > 0) {
+            lv_group_focus_obj(lv_group_get_obj_by_index(g, 0));
+        }
+        s_a164_nav_page = page;
+    }
+}
+
+static void a164_nav_init(void)
+{
+    lv_style_init(&s_a164_focus_style);
+    lv_style_set_outline_width(&s_a164_focus_style, 2);
+    lv_style_set_outline_color(&s_a164_focus_style, COLOR_LAB5_MAGENTA);
+    lv_style_set_outline_opa(&s_a164_focus_style, LV_OPA_70);
+    lv_style_set_outline_pad(&s_a164_focus_style, 2);
+    lv_timer_create(a164_nav_timer_cb, 150, NULL);
+}
+
 static void save_boot_sound_to_nvs(boot_sound_mode_t mode)
 {
     nvs_handle_t nvs;
@@ -51939,8 +52788,15 @@ static void detect_boards(void)
     if (usb_nmea_device_seen || usb_is_known_gps) {
         ESP_LOGI(TAG, "[USB] GPS accessory detected (NMEA stream)");
     }
+    bool usb_is_monster = usb_cdc_connected && !usb_nmea_device_seen && !usb_is_known_gps;
+    if (usb_is_monster) {
+        grove_detected = false;
+        mbus_detected  = false;
+    } else {
+        grove_detected = ping_uart_direct(UART_NUM, "Grove", &grove_ctx);
+        mbus_detected  = ping_uart(UART2_NUM, "MBus", &mbus_ctx);
+    }
     uart1_detected = (grove_detected || usb_detected);  // For legacy compatibility
-    mbus_detected = ping_uart(UART2_NUM, "MBus", &mbus_ctx);
 
     // Log detection results (ping functions already log success)
     if (grove_detected) {
@@ -52206,6 +53062,23 @@ static void check_all_subghz_status(void)
 //  3. Older firmware replies with "Unrecognized command" and never reprints
 //     the version. We only fall back to "<1.5.8" if we did NOT manage to
 //     snoop the version at boot - so we never overwrite a known-good version.
+// True when a detected JanOS version string is at least JANOS_VERSION_REQUIRED,
+// using a numeric MAJOR.MINOR.PATCH compare so a *newer* board is accepted (the
+// old exact strcmp flagged every non-matching version, including newer ones).
+// An empty or unparseable version is treated as incompatible so a genuinely
+// unknown board still warns.
+static bool janos_version_is_compatible(const char *ver)
+{
+    if (!ver || ver[0] == '\0') return false;
+    while (*ver == 'v' || *ver == 'V') ver++;
+    int a = 0, b = 0, c = 0, ra = 0, rb = 0, rc = 0;
+    if (sscanf(ver, "%d.%d.%d", &a, &b, &c) < 2) return false;
+    sscanf(JANOS_VERSION_REQUIRED, "%d.%d.%d", &ra, &rb, &rc);
+    if (a != ra) return a > ra;
+    if (b != rb) return b > rb;
+    return c >= rc;
+}
+
 static void check_version_for_tab(tab_id_t tab)
 {
     if (tab == TAB_INTERNAL) return;
@@ -52218,7 +53091,7 @@ static void check_version_for_tab(tab_id_t tab)
 
     // Fast path: boot-banner snoop during ping already captured the version.
     if (ctx->janos_version[0] != '\0') {
-        ctx->janos_version_mismatch = (strcmp(ctx->janos_version, JANOS_VERSION_REQUIRED) != 0);
+        ctx->janos_version_mismatch = !janos_version_is_compatible(ctx->janos_version);
         ESP_LOGI(TAG, "[%s] JanOS version (from boot snoop): %s (mismatch=%d, rf=%s)",
                  tab_name, ctx->janos_version, ctx->janos_version_mismatch,
                  ctx->janos_rf_version[0] ? ctx->janos_rf_version : "n/a");
@@ -52277,7 +53150,7 @@ static void check_version_for_tab(tab_id_t tab)
     if (tab == TAB_USB) usb_rx_exclusive = false;
 
     if (ctx->janos_version[0] != '\0') {
-        ctx->janos_version_mismatch = (strcmp(ctx->janos_version, JANOS_VERSION_REQUIRED) != 0);
+        ctx->janos_version_mismatch = !janos_version_is_compatible(ctx->janos_version);
         ESP_LOGI(TAG, "[%s] JanOS version: %s (mismatch=%d, rf=%s)",
                  tab_name, ctx->janos_version, ctx->janos_version_mismatch,
                  ctx->janos_rf_version[0] ? ctx->janos_rf_version : "n/a");
@@ -54446,7 +55319,10 @@ static void show_theme_popup(void)
     lv_obj_set_style_pad_all(theme_popup_obj, 18, 0);
     lv_obj_set_flex_flow(theme_popup_obj, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(theme_popup_obj, 14, 0);
-    lv_obj_clear_flag(theme_popup_obj, LV_OBJ_FLAG_SCROLLABLE);
+    // Scrollable (vertical): with the added Landscape row the content can exceed
+    // the card height, so allow scrolling instead of clipping the last row.
+    lv_obj_add_flag(theme_popup_obj, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(theme_popup_obj, LV_DIR_VER);
 
     lv_obj_t *title = lv_label_create(theme_popup_obj);
     lv_label_set_text(title, "Theme");
@@ -55536,7 +56412,7 @@ static void ota_info_sync_running_context(const ota_slot_info_t *slot)
         if (short_ver[0]) {
             strncpy(tctx->janos_version, short_ver, sizeof(tctx->janos_version) - 1);
             tctx->janos_version[sizeof(tctx->janos_version) - 1] = '\0';
-            tctx->janos_version_mismatch = (strcmp(tctx->janos_version, JANOS_VERSION_REQUIRED) != 0);
+            tctx->janos_version_mismatch = !janos_version_is_compatible(tctx->janos_version);
         }
     }
     if (slot->build[0]) {
@@ -56176,7 +57052,7 @@ static void ota_ta_focus_cb(lv_event_t *e)
 {
     lv_obj_t *ta = lv_event_get_target(e);
     if (g_ota.keyboard) {
-        lv_keyboard_set_textarea(g_ota.keyboard, ta);
+        app_kb_bind(g_ota.keyboard, ta);
         lv_obj_clear_flag(g_ota.keyboard, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -57091,7 +57967,8 @@ static void show_settings_page(void)
     lv_obj_set_flex_align(tiles, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(tiles, 20, 0);
     lv_obj_set_style_pad_row(tiles, 20, 0);
-    lv_obj_clear_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(tiles, LV_DIR_VER);
 
     // Scan Setup tile
     create_tile(tiles, LV_SYMBOL_REFRESH, "Scan\nSetup", COLOR_MATERIAL_GREEN, settings_tile_event_cb, "Scan Setup");
@@ -57366,7 +58243,7 @@ static void sd_admin_password_focus_cb(lv_event_t *e)
 {
     tab_context_t *ctx = &internal_ctx;
     if (!ctx || !ctx->sd_admin_keyboard) return;
-    lv_keyboard_set_textarea(ctx->sd_admin_keyboard, ctx->sd_admin_password_input);
+    app_kb_bind(ctx->sd_admin_keyboard, ctx->sd_admin_password_input);
     lv_obj_clear_flag(ctx->sd_admin_keyboard, LV_OBJ_FLAG_HIDDEN);
     (void)e;
 }
@@ -57698,7 +58575,7 @@ static void show_sd_admin_page(void)
     lv_obj_add_flag(ctx->sd_admin_keyboard, LV_OBJ_FLAG_FLOATING);
     lv_obj_align(ctx->sd_admin_keyboard, LV_ALIGN_BOTTOM_MID, 0, -8);
     style_on_screen_keyboard(ctx->sd_admin_keyboard);
-    lv_keyboard_set_textarea(ctx->sd_admin_keyboard, ctx->sd_admin_password_input);
+    app_kb_bind(ctx->sd_admin_keyboard, ctx->sd_admin_password_input);
     lv_obj_add_event_cb(ctx->sd_admin_keyboard, sd_admin_keyboard_cb, LV_EVENT_ALL, NULL);
     lv_obj_add_flag(ctx->sd_admin_keyboard, LV_OBJ_FLAG_HIDDEN);
     ctx->current_visible_page = ctx->sd_admin_page;
@@ -60912,6 +61789,14 @@ void app_main(void)
     } else {
         ESP_LOGI(TAG, "SD card mounted at %s", CONFIG_BSP_SD_MOUNT_POINT);
     }
+    // Reflect the boot-time mount result on the internal-SD presence flags right
+    // away. Otherwise these are only set later inside check_all_sd_cards(), which
+    // runs behind the USB/board-detection path and can be delayed or skipped if
+    // that path stalls -- leaving a mounted card reported as "No SD card". Both
+    // symbols are file-scope and already initialized (internal_ctx via
+    // init_all_tab_contexts() above); the later stat("/sdcard") refresh agrees.
+    internal_sd_present = (ret == ESP_OK);
+    internal_ctx.sd_card_present = internal_sd_present;
 
     // Enable battery charging
     ESP_LOGI(TAG, "Enabling battery charging...");
@@ -60927,6 +61812,7 @@ void app_main(void)
     load_clock_settings_from_nvs();
     load_wd_autoupload_from_nvs();
     load_janos_ft_baud_from_nvs();
+    load_wifi_saved_from_nvs();  // remembered Wi-Fi passwords
 
     // Kick the startup melody off here, the first moment both prerequisites are
     // met: the codec is up and NVS has told us which melody to play. It used to
@@ -60989,6 +61875,11 @@ void app_main(void)
     lv_refr_now(disp);
     bsp_display_unlock();
 
+    // Bring up the M5 Tab5 A164 physical keyboard (I2C 0x6D on GPIO0/1). This is
+    // independent of the USB-A host port (MonsterC5 CDC link), so both work at
+    // once. Safe if the keyboard isn't docked -- it hot-detects when connected.
+    a164_keyboard_init(disp);
+    a164_nav_init();  // arrow-key menu navigation for the A164
     // Start application-controlled DFS only after the display driver has
     // completed its full-speed initialization. Light sleep remains disabled;
     // touch and the MIPI-DPI framebuffer stay active while the backlight is off.

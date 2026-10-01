@@ -116,6 +116,23 @@ jobs:
           cp "binaries-esp32p4/M5MonsterC5-Tab5-full-${{ steps.version.outputs.version }}.bin" \
             "binaries-esp32p4/M5MonsterC5-Tab5-full.bin"
 
+      - name: Package for M5StackLauncher
+        id: launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          # One stable-named asset: the SD-card file and the Favorites URL target
+          # (releases/latest/download/...). The Launcher names the installed app after
+          # the file stem, cut to 20 chars, hence the short name. Unlike
+          # M5MonsterC5-Tab5-full-${version}.bin, its embedded partition table drops the
+          # unused SPIFFS rows -- see docs/LAUNCHER.md.
+          python3 tools/package_launcher.py \
+            --build-dir binaries-esp32p4 \
+            --out-dir binaries-esp32p4 \
+            --name "MonsterC5-Tab5.bin" \
+            --version "$version"
+
       - name: Package firmware zip
         id: bundle
         run: |
@@ -127,6 +144,8 @@ jobs:
             bootloader.bin \
             partition-table.bin \
             flash_board.py \
+            launcher-manifest.json \
+            MonsterC5-Tab5.bin \
             M5MonsterC5-Tab5-full.bin \
             "M5MonsterC5-Tab5-full-${{ steps.version.outputs.version }}.bin" \
             "M5MonsterC5-Tab5-${{ steps.version.outputs.version }}.bin" \
@@ -172,6 +191,8 @@ jobs:
             "firmware/M5MonsterC5-Tab5-full-${FW_VERSION}.bin"
             firmware/M5MonsterC5-Tab5.bin
             "firmware/M5MonsterC5-Tab5-${FW_VERSION}.bin"
+            firmware/MonsterC5-Tab5.bin
+            firmware/launcher-manifest.json
           )
 
           if [ -f "firmware/M5MonsterC5-Tab5-${FW_VERSION}.zip" ]; then
@@ -194,6 +215,7 @@ jobs:
           BASE_URL="https://github.com/$REPO/releases/download/$TAG"
           FW_ZIP="$BASE_URL/M5MonsterC5-Tab5-${FW_VERSION}.zip"
           BUNDLE_ZIP="$BASE_URL/M5MonsterC5-Tab5-${FW_VERSION}-bundle.zip"
+          LAUNCHER_BIN="$BASE_URL/MonsterC5-Tab5.bin"
           RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
           PAGES_LINK="https://${REPO%/*}.github.io/${REPO#*/}/"
 
@@ -202,7 +224,8 @@ jobs:
             printf '%s\n' "Release page: ${RELEASE_PAGE}"
             printf '%s\n' "Web flasher: ${PAGES_LINK}"
             printf '%s\n' "Firmware (${FW_VERSION}): ${FW_ZIP}"
-            printf '%s\n\n' "Bundle: ${BUNDLE_ZIP}"
+            printf '%s\n' "Bundle: ${BUNDLE_ZIP}"
+            printf '%s\n\n' "M5StackLauncher (SD card install): ${LAUNCHER_BIN}"
           } > "$notes_file"
 
           if [ "${GITHUB_EVENT_NAME:-}" = "release" ]; then
@@ -265,6 +288,8 @@ jobs:
             release_artifacts/firmware/M5MonsterC5-Tab5-full-${{ needs.firmware.outputs.fw_version }}.bin
             release_artifacts/firmware/M5MonsterC5-Tab5.bin
             release_artifacts/firmware/M5MonsterC5-Tab5-${{ needs.firmware.outputs.fw_version }}.bin
+            release_artifacts/firmware/MonsterC5-Tab5.bin
+            release_artifacts/firmware/launcher-manifest.json
             release_artifacts/firmware/M5MonsterC5-Tab5-${{ needs.firmware.outputs.fw_version }}.zip
             release_artifacts/bundle/M5MonsterC5-Tab5-${{ needs.firmware.outputs.fw_version }}-bundle.zip
         env:

@@ -19,6 +19,7 @@
 #include "driver/i2s_tdm.h"
 #include "bsp/config.h"
 #include "bsp/display.h"
+#include "esp_lcd_touch.h"
 #include "esp_codec_dev.h"
 #include "sdkconfig.h"
 
@@ -344,6 +345,13 @@ lv_display_t *bsp_display_start_with_config(const bsp_display_cfg_t *cfg);
  * @return Pointer to LVGL input device or NULL when not initialized
  */
 lv_indev_t *bsp_display_get_input_dev(void);
+
+/**
+ * @brief Get the touch controller handle backing the display
+ *
+ * @return esp_lcd_touch handle, or NULL when no touch panel is initialized
+ */
+esp_lcd_touch_handle_t bsp_display_get_touch_handle(void);
 
 /**
  * @brief Take LVGL mutex

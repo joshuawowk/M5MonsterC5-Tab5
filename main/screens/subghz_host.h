@@ -235,6 +235,12 @@ void subghz_host_uart_send_for_tab(int tab_id, const char *cmd);
 int  subghz_host_uart_read_bytes(int tab_id, void *buf, size_t sz, uint32_t ticks);
 void subghz_host_uart_flush_input(int tab_id);  /* drop any stale RX bytes */
 
+/* Generic file-stream receiver: the C5 (no SD) streams files it wants saved as
+ * [FILEX name=<relpath> size=<n>] / [FILED]<b64> / [FILEX-END sum=<hex>], written
+ * to /sdcard/<relpath>. Call on every UART line; returns true if the line was
+ * part of a transfer (skip normal parsing). */
+bool subghz_host_recv_file_stream(const char *line);
+
 /* Navigation */
 void subghz_host_hide_all_pages(void);
 void subghz_host_show_main_tiles(void);
@@ -265,11 +271,18 @@ void subghz_host_free_state(subghz_tab_state_t **pstate);
  * Public screen entry points (provided by screens/.c)
  * ---------------------------------------------------------- */
 void show_subghz_page(void);
+/* ported radio-apps screens (Radios submenu) */
+void show_nrf_scanner_page(void);
+void show_subghz_spectrum_page(void);
+void show_nrf_esb_page(void);
+void show_subghz_brute_page(void);
+void show_subghz_jamdet_page(void);
+void show_ble_spam_page(void);
 void show_subghz_listen_page(void);
 void show_subghz_listen_page_at(float mhz, bool autostart);
 void show_subghz_manage_page(void);
 void show_subghz_jammer_page(void);
-void show_subghz_tesla_page(void);
+void show_ble_detect_page(void);
 void show_subghz_hunter_page(void);
 void show_subghz_hunter_page_resume(void);
 void show_subghz_scanner_page(void);

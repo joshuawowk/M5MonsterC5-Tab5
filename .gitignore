@@ -1,7 +1,14 @@
 .vscode/settings.json
 .claude/settings.local.json
-skill-observations/
+
+# Build output
 build/
+
+# Python bytecode
+__pycache__/
+
+skill-observations/
+skill-observations/checkpoints.log
 
 # Local Polish-language emulator technical notes and reports (September 2026)
 /docs/ui-emulator/Full_Scope_and_Stories.md
@@ -19,4 +26,3 @@ build/
 /docs/ui-emulator/Stories_TODO.md
 /docs/ui-emulator/UI_Endpoints_and_Controls.md
 /docs/ui-emulator/communication-endpoints.md
-skill-observations/checkpoints.log
