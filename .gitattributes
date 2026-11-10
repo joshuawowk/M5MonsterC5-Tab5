@@ -1,0 +1,2 @@
+# Packaged firmware images are build artifacts: never 3-way-text-merge them
+binaries-esp32p4/*.bin -merge=binary -diff

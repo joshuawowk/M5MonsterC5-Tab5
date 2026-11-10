@@ -673,6 +673,12 @@ esp_err_t bsp_sdcard_deinit(char* mount_point)
         return ESP_ERR_INVALID_STATE;
     }
 
+    /* Nothing mounted: no-op so the remount path can call this unconditionally
+     * without tripping esp_vfs_fat_sdcard_unmount() on a NULL card handle. */
+    if (card == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     /* Unmount an SD card from the FAT filesystem and release resources acquired */
     esp_err_t ret_val = esp_vfs_fat_sdcard_unmount(mount_point, card);
 
@@ -685,6 +691,16 @@ esp_err_t bsp_sdcard_deinit(char* mount_point)
     card = NULL;
 
     return ret_val;
+}
+
+bool bsp_sdcard_is_present(void)
+{
+    if (card == NULL) {
+        return false;
+    }
+    // CMD13 (SEND_STATUS): a real bus round-trip, so a pulled card fails here
+    // even though cached FatFs state would still look valid.
+    return sdmmc_get_status(card) == ESP_OK;
 }
 
 //==================================================================================
@@ -1815,6 +1831,12 @@ lv_display_t* bsp_display_start(void)
                              }};
     // Increase LVGL task stack size for complex UIs with spinners and overlays
     cfg.lvgl_port_cfg.task_stack = 16384;
+    // Leave task_affinity at the port default (-1, unpinned). Pinning LVGL to
+    // core 1 was tried and made the UI noticeably less smooth: esp_lvgl_port
+    // shares timer_mux between lv_tick_inc (esp_timer task, core 0) and the
+    // touch read in the LVGL task, so pinning forces that 5 ms handoff across
+    // cores, with priority inheritance crossing the core boundary each time.
+    // It also did not help the symptom it was meant to fix.
     return bsp_display_start_with_config(&cfg);
 }
 

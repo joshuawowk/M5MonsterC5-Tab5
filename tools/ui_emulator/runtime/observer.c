@@ -37,6 +37,89 @@ EM_JS(int,app_observer_client_mac,(int tab,int index,int client,char *out,int si
  stringToUTF8(c?.mac||'',out,size);return c?1:0;
 });
 
+/* The firmware's JSON client snapshot is fed through its production parser.
+ * The browser transport accepts only these local simulation commands. */
+static bool app_observer_js_send(void *opaque,const char *command) {
+ (void)opaque;
+ return command && (!strcmp(command,"show_sniffer_clients") || !strcmp(command,"stop") ||
+                    !strncmp(command,"start_deauth_station ",21));
+}
+static bool app_observer_js_snapshot(tab_context_t *ctx) {
+ if(!ctx->observer_js.send)js_init(&ctx->observer_js,app_observer_js_send,ctx);
+ if(!js_load(&ctx->observer_js,(uint32_t)app_device_ms))return false;
+ unsigned aps=0,clients=0;
+ for(int i=0;i<ctx->observer_network_count;i++)if(ctx->observer_networks[i].bssid[0]) {
+  aps++;clients+=ctx->observer_networks[i].client_count;
+ }
+ char line[256];
+ snprintf(line,sizeof(line),"{\"schema_version\":1,\"record_type\":\"sniffer_clients_begin\",\"aps\":%u,\"clients\":%u}",aps,clients);
+ js_line(&ctx->observer_js,line,(uint32_t)app_device_ms);
+ for(int i=0;i<ctx->observer_network_count && ctx->observer_js.phase==JS_LOADING;i++) {
+  observer_network_t *net=&ctx->observer_networks[i];if(!net->bssid[0])continue;
+  char hex[65];size_t size=strlen(net->ssid);if(size>32)size=32;
+  for(size_t n=0;n<size;n++)snprintf(hex+2*n,sizeof(hex)-2*n,"%02X",(unsigned char)net->ssid[n]);
+  hex[2*size]=0;
+  snprintf(line,sizeof(line),"{\"schema_version\":1,\"record_type\":\"sniffer_ap\",\"bssid\":\"%s\",\"channel\":%d,\"ssid_hex\":\"%s\"}",net->bssid,net->channel,hex);
+  js_line(&ctx->observer_js,line,(uint32_t)app_device_ms);
+  for(int j=0;j<net->client_count && ctx->observer_js.phase==JS_LOADING;j++) {
+   snprintf(line,sizeof(line),"{\"schema_version\":1,\"record_type\":\"sniffer_client\",\"bssid\":\"%s\",\"station\":\"%s\"}",net->bssid,net->clients[j]);
+   js_line(&ctx->observer_js,line,(uint32_t)app_device_ms);
+  }
+ }
+ if(ctx->observer_js.phase==JS_LOADING) {
+  snprintf(line,sizeof(line),"{\"schema_version\":1,\"record_type\":\"sniffer_clients_end\",\"aps\":%u,\"clients\":%u}",aps,clients);
+  js_line(&ctx->observer_js,line,(uint32_t)app_device_ms);
+ }
+ return ctx->observer_js.phase==JS_READY;
+}
+static bool app_observer_js_find(tab_context_t *ctx,unsigned *index) {
+ uint8_t ap[6],station[6];
+ if(!sc_parse_mac(ctx->observer_pending_bssid,ap) || !sc_parse_mac(ctx->observer_pending_station,station))return false;
+ for(unsigned i=0;i<ctx->observer_js.model.client_count;i++) {
+  sc_client_t *client=&ctx->observer_js.model.clients[i];
+  if(!memcmp(ctx->observer_js.model.aps[client->ap].bssid,ap,6) && !memcmp(client->mac,station,6)) {
+   *index=i;return true;
+  }
+ }
+ return false;
+}
+static bool app_da_begin(tab_context_t *ctx,const char *kind,const char *mac,const char *single);
+static void app_da_stop(tab_context_t *ctx);
+static void destroy_deauth_popup_ui(void);
+static void app_observer_js_cancel(tab_context_t *ctx) {
+ if(ctx && (ctx->observer_js.phase==JS_STARTING || ctx->observer_js.phase==JS_ACTIVE))
+  js_cancel(&ctx->observer_js);
+}
+static void observer_js_request(tab_context_t *ctx,bool start_after) {
+ if(!ctx)return;
+ unsigned index=0;
+ if(ctx->observer_js.phase!=JS_READY || (start_after && !app_observer_js_find(ctx,&index))) {
+  if(!app_observer_js_snapshot(ctx)) {
+   if(ctx->observer_status_label)lv_label_set_text(ctx->observer_status_label,ctx->observer_js.error);
+   return;
+  }
+ }
+ if(!start_after)return;
+ if(!app_observer_js_find(ctx,&index) || !js_start(&ctx->observer_js,index,(uint32_t)app_device_ms)) {
+  if(ctx->deauth_btn_label)lv_label_set_text(ctx->deauth_btn_label,"Retry");
+  if(ctx->observer_status_label)lv_label_set_text(ctx->observer_status_label,"Client unavailable; refresh Observer.");
+  return;
+ }
+ if(!app_da_begin(ctx,"deauth",ctx->observer_pending_station,ctx->observer_pending_bssid)) {
+  if(ctx->observer_js.phase!=JS_READY)js_set_error(&ctx->observer_js,JS_READY,"Simulation attack unavailable");
+  if(ctx->observer_status_label)lv_label_set_text(ctx->observer_status_label,ctx->observer_js.error);
+  if(ctx->deauth_btn_label)lv_label_set_text(ctx->deauth_btn_label,"Retry");
+  return;
+ }
+ char line[180];
+ snprintf(line,sizeof(line),"{\"schema_version\":1,\"record_type\":\"station_deauth\",\"status\":\"started\",\"bssid\":\"%s\",\"station\":\"%s\"}",ctx->observer_pending_bssid,ctx->observer_pending_station);
+ js_line(&ctx->observer_js,line,(uint32_t)app_device_ms);
+ if(ctx->observer_js.phase==JS_ACTIVE) {
+  ctx->deauth_active=true;
+  if(ctx->deauth_btn_label)lv_label_set_text(ctx->deauth_btn_label,"STOP");
+ }
+}
+
 static void cancel_observer_inspect_task(tab_context_t *ctx) {
     if (ctx) { ctx->observer_inspect_task=NULL; ctx->observer_inspect_active=false; }
 }
@@ -46,7 +129,15 @@ static void close_network_popup(void) {
 }
 static void observer_stop_btn_cb(lv_event_t *e) {
     (void)e; tab_context_t *ctx=get_current_ctx(); if (!ctx) return;
+    if(ctx->observer_js.phase==JS_STARTING || ctx->observer_js.phase==JS_ACTIVE)app_da_stop(ctx);
+    if(ctx->deauth_popup)destroy_deauth_popup_ui();
+    js_free(&ctx->observer_js);
+    js_init(&ctx->observer_js,app_observer_js_send,ctx);
     ctx->observer_running=false; ctx->observer_start_active=false;
+    for(int i=0;i<ctx->observer_network_count;i++) {
+        ctx->observer_networks[i].snapshot_clock_ms=observer_clock_ms();
+        ctx->observer_networks[i].snapshot_live=false;
+    }
     app_observer_live_stop(tab_id_for_ctx(ctx));
     close_network_popup();
     if(ctx->observer_start_btn)lv_obj_remove_state(ctx->observer_start_btn,LV_STATE_DISABLED);
@@ -71,7 +162,9 @@ static void observer_start_btn_cb(lv_event_t *e) {
     (void)e; tab_context_t *ctx=get_current_ctx(); if(!ctx)return;
     int tab=tab_id_for_ctx(ctx);
     if(!ctx->observer_networks)ctx->observer_networks=calloc(MAX_OBSERVER_NETWORKS,sizeof(observer_network_t));
-    if(!ctx->observer_networks){emu_unsupported("Observer allocation failed");return;}
+    if(!ctx->observer_network_ui)ctx->observer_network_ui=calloc(MAX_OBSERVER_NETWORKS,sizeof(observer_network_ui_t));
+    if(!ctx->observer_networks||!ctx->observer_network_ui){emu_unsupported("Observer allocation failed");return;}
+    observer_options_load();
     char error[160]="";
     if(!app_observer_live_start(tab,"",error,sizeof(error))){if(ctx->observer_status_label)lv_label_set_text(ctx->observer_status_label,error);return;}
     app_observer_story_run[tab]++;
@@ -91,8 +184,25 @@ static void observer_start_btn_cb(lv_event_t *e) {
         app_observer_field(tab,i,"band",net->band,sizeof(net->band));
         app_observer_field(tab,i,"security",net->security,sizeof(net->security));
         app_observer_field(tab,i,"vendor",net->vendor,sizeof(net->vendor));
+        /* Deterministic protocol fixtures exercise advertised/absent/unknown
+         * security and WPS states without suggesting real RF observations. */
+        char extended[1600];
+        snprintf(extended,sizeof(extended),
+            "fixture | ext_ver=1 | bssid=%s | rssi=%d | age_ms=%d | hidden=%d | resolved_ssid_hex=%s | ssid_source=%s | profile_source=beacon | frame_status=valid | privacy=1 | rsn_status=valid | rsn_group=000FAC04 | rsn_pairwise=000FAC04 | rsn_akm=000FAC02,000FAC08 | pmf_capable=1 | pmf_required=%d | wpa_status=absent | wps_status=%s | wps_present=%s | wps_state=2 | wps_config_methods=128 | wps_setup_locked=0 | wps_selected_registrar=0 | wps_manufacturer_hex=53696D756C61746564 | wps_model_name_hex=54657374204150 | wps_device_name_hex=4F627365727665722066697874757265",
+            net->bssid,net->rssi,170+i*123,i==0,
+            i==0?"53696D204C6162":"unknown",i==0?"probe_response":"unknown",i%2,
+            i%3==0?"valid":i%3==1?"absent":"unknown",
+            i%3==0?"1":i%3==1?"0":"unknown");
+        observer_ext_parse(extended,&net->extended);
+        net->extended_received_ms=observer_clock_ms();
+        net->snapshot_clock_ms=net->extended_received_ms;net->snapshot_live=true;
+        snprintf(net->uptime,sizeof(net->uptime),"%dh %dm",i+1,i*7);
         for(int c=0;c<MAX_CLIENTS_PER_NETWORK;c++) {
             if(!app_observer_client_mac(tab,i,c,net->clients[c],sizeof(net->clients[c])))break;
+            snprintf(net->client_vendors[c],sizeof(net->client_vendors[c]),"Simulation vendor %d",c+1);
+            net->client_rssi[c]=-45-c*6;net->client_rssi_known[c]=true;
+            net->client_age_ms[c]=287+c*180;net->client_age_known[c]=true;
+            net->client_received_ms[c]=observer_clock_ms();
             net->client_count++;
         }
     }
@@ -185,6 +295,10 @@ static void app_observer_live_tick(tab_context_t *ctx,int tab) {
  app_observer_live_last[tab]=app_device_ms;int values[3]={0};
  if(!app_observer_live_state(tab,values)){
   ctx->observer_running=false;
+  for(int i=0;i<ctx->observer_network_count;i++) {
+   ctx->observer_networks[i].snapshot_clock_ms=observer_clock_ms();
+   ctx->observer_networks[i].snapshot_live=false;
+  }
   if(ctx->observer_start_btn)lv_obj_remove_state(ctx->observer_start_btn,LV_STATE_DISABLED);
   if(ctx->observer_stop_btn)lv_obj_add_state(ctx->observer_stop_btn,LV_STATE_DISABLED);
   if(ctx->observer_status_label)lv_label_set_text(ctx->observer_status_label,"Simulation stopped or reset; cached rows retained.");
@@ -193,13 +307,14 @@ static void app_observer_live_tick(tab_context_t *ctx,int tab) {
  for(int i=0;i<ctx->observer_network_count;i++){
   observer_network_t *net=&ctx->observer_networks[i];net->rssi=app_observer_live_rssi(tab,net->bssid,net->rssi);
   lv_obj_t *label=ctx->observer_inspect_info_labels&&i<ctx->observer_inspect_label_count?ctx->observer_inspect_info_labels[i]:NULL;
-  if(label&&lv_obj_is_valid(label)){char text[NETWORK_INFO_BUF];format_network_info(text,sizeof(text),net->bssid,net->channel,net->band,NULL,net->rssi,creds_badge(ctx,net->ssid),NULL,net->uptime,net->vendor);lv_label_set_text(label,text);}
+  if(label&&lv_obj_is_valid(label)){char text[NETWORK_INFO_BUF];observer_format_fields(net,text,sizeof(text));lv_label_set_text(label,text);}
  }
  for(int i=0;i<1024;i++){
   lv_obj_t *row=app_bindings[i].object;const char *id=app_bindings[i].id;
   size_t len=strlen(id);if(!row||len<7||strcmp(id+len-7,"/client")||!app_descendant(row,ctx->observer_table))continue;
   lv_obj_t *label=lv_obj_get_child(row,0);if(!label||!lv_obj_check_type(label,&lv_label_class))continue;
-  bool active=app_observer_live_client(tab,lv_label_get_text(label));
+  char mac[18];snprintf(mac,sizeof(mac),"%.17s",lv_label_get_text(label));
+  bool active=app_observer_live_client(tab,mac);
   lv_obj_set_style_text_color(label,active?COLOR_MATERIAL_TEAL:lv_color_hex(0x888888),0);
  }
  if(ctx->observer_status_label)lv_label_set_text_fmt(ctx->observer_status_label,"Simulation: %d packets | %d/%d clients active",values[0],values[1],values[2]);
@@ -226,4 +341,42 @@ static void app_observer_tick(void) {
         lv_label_set_text_fmt(ctx->mitm_status_label,"%s%s%s\nNo WiFi connection or authentication performed.",
             status,detail[0]?" Reason: ":"",detail);
     }
+}
+
+/* Test-only bounded inventory exercising the actual retained LVGL refresh.
+ * Native child counts avoid the inspector/interactive registry limits. */
+EMSCRIPTEN_KEEPALIVE double emu_observer_stress(int count,int clients,int step,int during_scroll) {
+ tab_context_t *ctx=get_current_ctx();
+ if(!ctx || !ctx->observer_networks || !ctx->observer_table ||
+    count<1 || count>MAX_OBSERVER_NETWORKS || clients<0 || clients>MAX_CLIENTS_PER_NETWORK) return -1;
+ int old=ctx->observer_network_count;
+ observer_network_t seed=ctx->observer_networks[0];
+ for(int i=0;i<count;i++) {
+  observer_network_t *n=&ctx->observer_networks[i];
+  if(i>=old) *n=seed;
+  snprintf(n->ssid,sizeof(n->ssid),"Stress hidden AP %03d generation %d",i,step);
+  snprintf(n->bssid,sizeof(n->bssid),"02:11:22:33:%02X:%02X",i/256,i%256);
+  n->extended.hidden=i%2;n->extended.present=true;n->extended.rssi_known=true;
+  snprintf(n->extended.resolved_ssid,sizeof(n->extended.resolved_ssid),"Resolved AP %03d update %d",i,step);
+  n->rssi=-40-(i+step)%50;n->client_count=clients;
+  for(int j=0;j<clients;j++) {
+   snprintf(n->clients[j],sizeof(n->clients[j]),"02:22:%02X:%02X:%02X:%02X",i/256,i%256,j,step%256);
+   snprintf(n->client_vendors[j],sizeof(n->client_vendors[j]),"Changed vendor %03d generation %d",j,step);
+  }
+ }
+ ctx->observer_network_count=count;
+ ctx->observer_has_new_networks=count!=old;
+ double t=emscripten_get_now();
+ if(during_scroll) {
+  lv_obj_scroll_to_y(ctx->observer_table,2000,LV_ANIM_OFF);
+  ctx->observer_ui_refresh_pending=true;
+ }
+ observer_sync_changed_tiles(ctx);
+ double mutation=emscripten_get_now()-t;
+ lv_obj_update_layout(ctx->observer_table);
+ double total=emscripten_get_now()-t;
+ int total_client_rows=0;
+ for(int i=0;i<count;++i) total_client_rows+=(int)lv_obj_get_child_count(ctx->observer_network_ui[i].client_container);
+ EM_ASM({globalThis.observerStress=({mutation:$0,total:$1,count:$2,clients:$3,step:$4,tiles:$5,expanded:$6,scrollY:$7,clientRows:$8,totalClientRows:$9,firstTile:$10});},mutation,total,count,clients,step,(int)lv_obj_get_child_count(ctx->observer_table),ctx->observer_network_ui[0].clients_expanded,(int)lv_obj_get_scroll_y(ctx->observer_table),(int)lv_obj_get_child_count(ctx->observer_network_ui[0].client_container),total_client_rows,(uintptr_t)ctx->observer_network_ui[0].tile);
+ return total;
 }
