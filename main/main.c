@@ -28,6 +28,7 @@
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_system.h"  // esp_restart() for orientation-toggle reboot
+#include "esp_partition.h"  // otadata erase for "Return to Sentinel" launcher handoff
 #include "a164_keyboard.h"  // M5 Tab5 A164 physical keyboard (I2C 0x6D) -> LVGL
 #include "observer_extended.h"
 #include "observer_options.h"
@@ -5396,11 +5397,33 @@ static __attribute__((unused)) void board_redetect_cb(void *user_data)
     }
 }
 
+// Post an async callback onto the LVGL thread, serialised against it.
+//
+// lv_async_call() allocates and links an LVGL timer (lv_timer_create -> the
+// global timer list). With CONFIG_LV_OS_NONE, LVGL's own lock is a no-op, so a
+// worker task that calls it races the LVGL thread walking that list in
+// lv_timer_handler -- an intermittent lost callback (stuck spinner) or list
+// corruption. bsp_display_lock() (esp_lvgl_port's recursive mutex) is the only
+// thing that actually serialises the two, so route every async post through here.
+//
+// The lock is recursive, so this is safe even when the caller already holds it
+// (e.g. an LVGL event handler). The 100 ms bounded wait means an unexpected
+// lock-ordering stall can never deadlock: on the rare timeout it falls back to
+// the previous unlocked behaviour, which is no worse than before. Returns
+// lv_async_call()'s result so callers that check it still compile.
+static inline lv_result_t ui_async_call(lv_async_cb_t cb, void *user_data)
+{
+    bool locked = bsp_display_lock(100);
+    lv_result_t r = lv_async_call(cb, user_data);
+    if (locked) bsp_display_unlock();
+    return r;
+}
+
 static __attribute__((unused)) void schedule_board_redetect(void)
 {
     // A USB device can be opened before LVGL is up (usb_boot_open_early runs
     // ahead of bsp_display_start). The redetect drives the GUI, so there is
-    // nothing to do yet and lv_async_call() into an uninitialized LVGL would
+    // nothing to do yet and ui_async_call() into an uninitialized LVGL would
     // corrupt the heap - the normal boot detection will pick the device up.
     if (!lvgl_ready) {
         return;
@@ -5409,7 +5432,7 @@ static __attribute__((unused)) void schedule_board_redetect(void)
         return;
     }
     board_redetect_pending = true;
-    lv_async_call(board_redetect_cb, NULL);
+    ui_async_call(board_redetect_cb, NULL);
 }
 
 static tab_id_t uart1_preferred_tab(void)
@@ -7560,7 +7583,7 @@ static void boot_detect_task(void *arg)
 {
     (void)arg;
     boot_detect_run_probes();
-    lv_async_call(boot_detection_done_async, NULL);
+    ui_async_call(boot_detection_done_async, NULL);
     boot_detect_task_handle = NULL;
     vTaskDelete(NULL);
 }
@@ -9368,7 +9391,7 @@ static void update_tab_styles(void)
                      COLOR_LAB5_MAGENTA);
     style_tab_button(internal_tab_btn,
                      current_tab == TAB_INTERNAL,
-                     dark_mode_enabled ? lv_color_hex(0x112E2C) : lv_color_hex(0xCCDEE1),
+                     dark_mode_enabled ? lv_color_hex(0x10243A) : lv_color_hex(0xC8D6E5),
                      COLOR_LAB5_MAGENTA);
 }
 
@@ -9899,6 +9922,7 @@ static void submenu_option_cb(lv_event_t *e)
     if (!name) return;
     if (strcmp(name, "Deauth Detector") == 0) show_deauth_detector_page();
     else if (strcmp(name, "Anti-Surv") == 0) show_antisurv_page();
+    else if (strcmp(name, "BLE Detector") == 0) show_ble_detect_page();
     else if (strcmp(name, "Sub-GHz") == 0) show_subghz_page();
     else if (strcmp(name, "Jammer") == 0) show_jammer_page();
     else if (strcmp(name, "nRF Scan") == 0) show_nrf_scanner_page();
@@ -9954,6 +9978,7 @@ static void show_group_submenu(const char *title, bool radios)
         create_tile(row, LV_SYMBOL_WARNING, "Jam\nDetect", COLOR_MATERIAL_CYAN, submenu_option_cb, "Jam Detect");
         create_tile(row, LV_SYMBOL_BLUETOOTH, "BLE\nSpam", COLOR_MATERIAL_PURPLE, submenu_option_cb, "BLE Spam");
     } else {
+        create_tile(row, LV_SYMBOL_BLUETOOTH, "BLE\nDetector", COLOR_MATERIAL_BLUE, submenu_option_cb, "BLE Detector");
         create_tile(row, LV_SYMBOL_EYE_OPEN, "Deauth\nDetector", COLOR_MATERIAL_AMBER, submenu_option_cb, "Deauth Detector");
         create_tile(row, LV_SYMBOL_EYE_OPEN, "Anti-Surv", COLOR_MATERIAL_PINK, submenu_option_cb, "Anti-Surv");
     }
@@ -9998,7 +10023,7 @@ static void main_tile_event_cb(lv_event_t *e)
     } else if (strcmp(tile_name, "Anti-Surv") == 0) {
         show_antisurv_page();
     } else if (strcmp(tile_name, "Detectors") == 0) {
-        show_ble_detect_page();
+        show_detectors_popup();
     } else if (strcmp(tile_name, "Radios") == 0) {
         show_radios_popup();
     } else if (strcmp(tile_name, "IoT") == 0) {
@@ -10239,13 +10264,16 @@ static void show_hidden_ssid_popup(hidden_ssid_callback_t callback)
         char dropdown_opts[1024] = {0};
         int pos = 0;
         for (int i = 0; i < evil_twin_entry_count; i++) {
-            if (i > 0) {
-                dropdown_opts[pos++] = '\n';
-            }
-            int remain = (int)sizeof(dropdown_opts) - pos - 1;
-            if (remain <= 0) break;
-            int written = snprintf(dropdown_opts + pos, remain, "%s", evil_twin_entries[i].ssid);
-            if (written > 0) pos += written;
+            int remain = (int)sizeof(dropdown_opts) - pos;
+            if (remain <= 1) break;
+            // Fold the separator into the bounded write so the '\n' is itself
+            // length-checked, and advance by what was actually written (not
+            // snprintf's would-have-written return, which can run pos past the end).
+            int written = snprintf(dropdown_opts + pos, remain, "%s%s",
+                                   (i > 0) ? "\n" : "", evil_twin_entries[i].ssid);
+            if (written < 0) break;
+            if (written >= remain) break;  // truncated: the buffer is full
+            pos += written;
         }
 
         hidden_ssid_dropdown = lv_dropdown_create(hidden_ssid_popup);
@@ -11250,7 +11278,7 @@ static void show_mitm_popup(void)
         int retries = 16;
         int empty_reads = 0;
 
-        while (retries-- > 0 && evil_twin_entry_count < 50) {
+        while (retries-- > 0 && evil_twin_entry_count < EVIL_TWIN_MAX_ENTRIES) {
             int len = transport_read_bytes_tab(active_tab, uart_port, rx_buffer,
                                                sizeof(rx_buffer) - 1,
                                                pdMS_TO_TICKS(100));
@@ -11258,7 +11286,7 @@ static void show_mitm_popup(void)
                 rx_buffer[len] = '\0';
                 empty_reads = 0;
                 char *line = strtok(rx_buffer, "\n\r");
-                while (line != NULL && evil_twin_entry_count < 50) {
+                while (line != NULL && evil_twin_entry_count < EVIL_TWIN_MAX_ENTRIES) {
                     if (strlen(line) > 3 && line[0] == '\"') {
                         char *ssid_start = line + 1;
                         char *ssid_end = strchr(ssid_start, '\"');
@@ -13359,7 +13387,7 @@ static void show_gitm_page(void)
 
     ctx->gitm->page = lv_obj_create(container);
     lv_obj_set_size(ctx->gitm->page, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_color(ctx->gitm->page, lv_color_hex(0x0A1A1A), 0);
+    lv_obj_set_style_bg_color(ctx->gitm->page, ui_bg_color(), 0);
     lv_obj_set_style_border_width(ctx->gitm->page, 0, 0);
     lv_obj_set_style_pad_all(ctx->gitm->page, 16, 0);
     lv_obj_set_flex_flow(ctx->gitm->page, LV_FLEX_FLOW_COLUMN);
@@ -14342,13 +14370,16 @@ static int pcap_b64_val(char c)
 
 static int pcap_b64_decode_line(const char *in, uint8_t *out, size_t out_max)
 {
-    int acc = 0, nbits = 0;
+    unsigned acc = 0;
+    int nbits = 0;
     size_t n = 0;
     for (const char *p = in; *p; p++) {
         if (*p == '=' || *p == '\r' || *p == '\n' || *p == ' ') continue;
         int v = pcap_b64_val(*p);
         if (v < 0) return -1;
-        acc = (acc << 6) | v;
+        // Mask to 16 bits: only the low (nbits + 6) <= 14 bits are ever read, and an
+        // unmasked signed left shift overflows into the sign bit (undefined).
+        acc = ((acc << 6) | (unsigned)v) & 0xFFFFu;
         nbits += 6;
         if (nbits >= 8) {
             nbits -= 8;
@@ -14381,6 +14412,27 @@ static void tab5_mkdir_parents(const char *path)
     }
 }
 
+// A file name that arrives on the external stream ([FILEX]/[FILEA]/[PCAPX]) is
+// attacker-influenced: it comes off the C5's UART/USB-A link, which any CDC device
+// can drive. Reject names that could escape the intended directory -- an absolute
+// path, a backslash, a control character, or any ".." path component -- so the
+// receivers can only ever write below /sdcard/. Sub-directories (a plain '/') are
+// still allowed; tab5_mkdir_parents() creates them.
+static bool recv_relpath_is_safe(const char *rel)
+{
+    if (!rel || !rel[0]) return false;
+    if (rel[0] == '/') return false;
+    for (const char *p = rel; *p; p++) {
+        if (*p == '\\') return false;
+        if ((unsigned char)*p < 0x20) return false;
+        if (p[0] == '.' && p[1] == '.' && (p[2] == '\0' || p[2] == '/') &&
+            (p == rel || p[-1] == '/')) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool tab5_recv_file_stream_line(const char *line)
 {
     if (strncmp(line, "[FILEX name=", 12) == 0) {
@@ -14392,6 +14444,11 @@ static bool tab5_recv_file_stream_line(const char *line)
         size_t nl = (size_t)(sp - n);
         if (nl >= sizeof(g_filx_relpath)) nl = sizeof(g_filx_relpath) - 1;
         memcpy(g_filx_relpath, n, nl); g_filx_relpath[nl] = '\0';
+        if (!recv_relpath_is_safe(g_filx_relpath)) {
+            ESP_LOGW(TAG, "[FILE-RX] rejected unsafe name '%s'", g_filx_relpath);
+            g_filx_relpath[0] = '\0';
+            return true;
+        }
         long sz = strtol(sp + 6, NULL, 10);
         if (sz <= 0 || sz > FILX_RX_MAX) return true;
         if (!g_filx_buf) g_filx_buf = heap_caps_malloc(FILX_RX_MAX, MALLOC_CAP_SPIRAM);
@@ -14458,6 +14515,10 @@ static bool tab5_recv_file_stream_line(const char *line)
         size_t nl = (size_t)(close - n);
         if (nl >= sizeof(rel)) nl = sizeof(rel) - 1;
         memcpy(rel, n, nl); rel[nl] = '\0';
+        if (!recv_relpath_is_safe(rel)) {
+            ESP_LOGW(TAG, "[FILE-RX] rejected unsafe append name '%s'", rel);
+            return true;
+        }
         uint8_t dec[64];
         int dn = pcap_b64_decode_line(close + 1, dec, sizeof(dec));
         if (dn <= 0) return true;
@@ -14491,7 +14552,12 @@ static bool handshaker_handle_pcap_line(const char *line)
             if (nl >= sizeof(g_pcap_rx_name)) nl = sizeof(g_pcap_rx_name) - 1;
             memcpy(g_pcap_rx_name, n, nl);
             g_pcap_rx_name[nl] = '\0';
-            g_pcap_rx_expected = (size_t)strtoul(sp + 6, NULL, 10);
+            if (!recv_relpath_is_safe(g_pcap_rx_name)) {
+                ESP_LOGW(TAG, "[PCAP-RX] rejected unsafe name '%s'", g_pcap_rx_name);
+                g_pcap_rx_name[0] = '\0';
+            } else {
+                g_pcap_rx_expected = (size_t)strtoul(sp + 6, NULL, 10);
+            }
         }
         if (!g_pcap_rx_buf) {
             g_pcap_rx_buf = heap_caps_malloc(PCAP_RX_MAX, MALLOC_CAP_SPIRAM);
@@ -16666,7 +16732,7 @@ static void show_nmap_page(void)
         int retries = 10;
         int empty_reads = 0;
 
-        while (retries-- > 0 && evil_twin_entry_count < 50) {
+        while (retries-- > 0 && evil_twin_entry_count < EVIL_TWIN_MAX_ENTRIES) {
             int len = transport_read_bytes(uart_port, rx_buffer, sizeof(rx_buffer) - 1, pdMS_TO_TICKS(100));
             if (len > 0) {
                 rx_buffer[len] = '\0';
@@ -16674,7 +16740,7 @@ static void show_nmap_page(void)
                 empty_reads = 0;
 
                 char *ln = strtok(rx_buffer, "\n\r");
-                while (ln != NULL && evil_twin_entry_count < 50) {
+                while (ln != NULL && evil_twin_entry_count < EVIL_TWIN_MAX_ENTRIES) {
                     if (strlen(ln) > 3 && ln[0] == '\"') {
                         char *ssid_start = ln + 1;
                         char *ssid_end = strchr(ssid_start, '\"');
@@ -17054,7 +17120,7 @@ static void show_arp_poison_page(void)
         int retries = 10;
         int empty_reads = 0;
 
-        while (retries-- > 0 && evil_twin_entry_count < 50) {
+        while (retries-- > 0 && evil_twin_entry_count < EVIL_TWIN_MAX_ENTRIES) {
             int len = transport_read_bytes(uart_port, rx_buffer, sizeof(rx_buffer) - 1, pdMS_TO_TICKS(100));
 
             if (len > 0) {
@@ -17064,7 +17130,7 @@ static void show_arp_poison_page(void)
 
                 // Parse lines: "SSID", "password"
                 char *line = strtok(rx_buffer, "\n\r");
-                while (line != NULL && evil_twin_entry_count < 50) {
+                while (line != NULL && evil_twin_entry_count < EVIL_TWIN_MAX_ENTRIES) {
                     // Skip empty lines and headers
                     if (strlen(line) > 3 && line[0] == '\"') {
                         // Extract SSID
@@ -18494,16 +18560,24 @@ static void do_evil_twin_start(void)
     char status_text[512];
     int pos = snprintf(status_text, sizeof(status_text),
         "Attacking networks:\n");
+    // snprintf returns the length it WOULD have written, so pos can run past the
+    // buffer; clamp after every step or `sizeof - pos` underflows (size_t) and the
+    // next snprintf writes out of bounds.
+    if (pos < 0) pos = 0;
+    if (pos >= (int)sizeof(status_text)) pos = (int)sizeof(status_text) - 1;
 
     for (int i = 0; i < v.sel_count; i++) {
         int idx = v.sel_indices[i];
         wifi_network_t *net = &v.nets[idx];
         const char *ssid = strlen(net->ssid) > 0 ? net->ssid : "(Hidden)";
-        pos += snprintf(status_text + pos, sizeof(status_text) - pos,
+        int n = snprintf(status_text + pos, sizeof(status_text) - pos,
             "  - %s (%s)\n", ssid, net->bssid);
+        if (n < 0) break;
+        pos += n;
+        if (pos >= (int)sizeof(status_text)) { pos = (int)sizeof(status_text) - 1; break; }
     }
 
-    pos += snprintf(status_text + pos, sizeof(status_text) - pos,
+    snprintf(status_text + pos, sizeof(status_text) - pos,
         "\nEvil Twin network: %s\n"
         "Portal: %s\n\n"
         "Waiting for victim to connect...",
@@ -18934,14 +19008,17 @@ static const char *tool_order_action(uint8_t id)
     case TO_WIFI_SCAN: return "WiFi Scan & Attack";
     case TO_GLOBAL_WIFI: return "Global WiFi Attacks";
     case TO_COMPROMISED: return "Compromised Data";
-    case TO_DEAUTH: return "Deauth Detector";
+    /* TO_DEAUTH / TO_SUBGHZ keep their persisted IDs but now map to the home tiles
+     * that replaced the old standalone Deauth Detector and Sub-GHz tiles: Detectors
+     * (a submenu of BLE/Deauth/Anti-Surv) and Radios (the Sub-GHz/nRF submenu). */
+    case TO_DEAUTH: return "Detectors";
     case TO_BLUETOOTH: return "Bluetooth";
     case TO_OBSERVER: return "Network Observer";
     case TO_KARMA: return "Karma";
     case TO_WARDRIVE: return "Wardrive";
-    case TO_ANTISURV: return "Anti-Surv";
+    case TO_ANTISURV: return "Anti-Surv";  /* no longer a home tile; see tile_order.c default */
     case TO_MESH: return "IoT";
-    case TO_SUBGHZ: return "Sub-GHz";
+    case TO_SUBGHZ: return "Radios";
     case TO_NFC: return "NFC";
     case TO_ANALYZER: return "WiFi Analyzer";
     case TO_AUDITOR: return "WPA PSK Auditor";
@@ -19058,28 +19135,6 @@ static void create_uart_tiles_in_container(lv_obj_t *container, tab_context_t *c
                                        COLOR_MATERIAL_PINK, main_tile_event_cb, "Radios");
     }
 
-    // In landscape the wide aspect leaves the fixed-size tiles floating with empty
-    // space; lay them out as a 5x2 grid that stretches to fill the tile area.
-    // Portrait keeps the wrapping layout (it already fits the tall aspect well).
-    {
-        uint32_t tile_n = lv_obj_get_child_count(tile_grid);
-        if (ui_wide_layout() && tile_n == 10) {
-            static const int32_t col5[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
-                                           LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
-            static const int32_t row2[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
-            lv_obj_set_style_pad_row(tile_grid, tile_gap, 0);
-            lv_obj_set_style_pad_column(tile_grid, tile_gap, 0);
-            lv_obj_set_style_pad_top(tile_grid, 8, 0);
-            lv_obj_set_style_pad_bottom(tile_grid, 8, 0);
-            lv_obj_set_grid_dsc_array(tile_grid, col5, row2);
-            lv_obj_set_layout(tile_grid, LV_LAYOUT_GRID);
-            for (uint32_t i = 0; i < tile_n; i++) {
-                lv_obj_t *t = lv_obj_get_child(tile_grid, i);
-                lv_obj_set_grid_cell(t, LV_GRID_ALIGN_STRETCH, (int32_t)(i % 5), 1,
-                                     LV_GRID_ALIGN_STRETCH, (int32_t)(i / 5), 1);
-            }
-        }
-    }
     if (ctx && ctx->has_nfc) {
         ctx->nfc_tile = create_tile(tile_grid, LV_SYMBOL_USB, "NFC",
                                     COLOR_MATERIAL_CYAN, main_tile_event_cb, "NFC");
@@ -19091,6 +19146,32 @@ static void create_uart_tiles_in_container(lv_obj_t *container, tab_context_t *c
                 main_tile_event_cb, "WiFi Analyzer");
 
     apply_tool_order(tile_grid, TO_MONSTER, main_tile_event_cb);
+
+    // In landscape the wide aspect leaves the fixed-size tiles floating with empty
+    // space; lay them out as a stretch grid that fills the tile area. Portrait keeps
+    // the wrapping layout (it already fits the tall aspect). This runs AFTER every
+    // tile is created (NFC and WiFi Analyzer are added above) and AFTER
+    // apply_tool_order, so no tile is left without a cell (which would stack it at
+    // 0,0) and the saved order drives each tile's grid position. 5 columns x 3 rows
+    // holds up to 15 tiles; the current grid is 10-12.
+    if (ui_wide_layout()) {
+        static const int32_t col5[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
+                                       LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
+        static const int32_t row3[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
+                                       LV_GRID_TEMPLATE_LAST};
+        lv_obj_set_style_pad_row(tile_grid, tile_gap, 0);
+        lv_obj_set_style_pad_column(tile_grid, tile_gap, 0);
+        lv_obj_set_style_pad_top(tile_grid, 8, 0);
+        lv_obj_set_style_pad_bottom(tile_grid, 8, 0);
+        lv_obj_set_grid_dsc_array(tile_grid, col5, row3);
+        lv_obj_set_layout(tile_grid, LV_LAYOUT_GRID);
+        uint32_t tile_n = lv_obj_get_child_count(tile_grid);
+        for (uint32_t i = 0; i < tile_n && i < 15; i++) {
+            lv_obj_t *t = lv_obj_get_child(tile_grid, i);
+            lv_obj_set_grid_cell(t, LV_GRID_ALIGN_STRETCH, (int32_t)(i % 5), 1,
+                                 LV_GRID_ALIGN_STRETCH, (int32_t)(i / 5), 1);
+        }
+    }
 
     if (dashboard_enabled) {
         lv_obj_t *footer = lv_obj_create(*tiles_ptr);
@@ -21730,7 +21811,7 @@ static void observer_clients_task(void *arg)
 
     if (need_load) {
         if (!js_load(&ctx->observer_js, tab5_now_ms())) {
-            lv_async_call(observer_js_failed_ui, ctx);
+            ui_async_call(observer_js_failed_ui, ctx);
             ctx->observer_pending_start = false;
             ctx->observer_js_busy = false;
             ctx->observer_js_task = NULL;
@@ -21744,11 +21825,11 @@ static void observer_clients_task(void *arg)
         ctx->observer_pending_start = false;
         if (!observer_js_find_client(ctx, ctx->observer_pending_bssid, ctx->observer_pending_station, &index) ||
             !js_start(&ctx->observer_js, index, tab5_now_ms())) {
-            lv_async_call(observer_js_failed_ui, ctx);
+            ui_async_call(observer_js_failed_ui, ctx);
         } else {
             observer_js_feed_until(ctx, JS_ACTIVE, JS_READY);
-            if (ctx->observer_js.phase == JS_ACTIVE) lv_async_call(observer_js_started_ui, ctx);
-            else lv_async_call(observer_js_failed_ui, ctx);
+            if (ctx->observer_js.phase == JS_ACTIVE) ui_async_call(observer_js_started_ui, ctx);
+            else ui_async_call(observer_js_failed_ui, ctx);
         }
     }
 
@@ -22818,7 +22899,7 @@ static void show_observer_page(void)
     ctx->observer_page = lv_obj_create(container);
     observer_page = ctx->observer_page;  // Keep legacy reference for compatibility
     lv_obj_set_size(observer_page, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_color(observer_page, lv_color_hex(0x0A1A1A), 0);
+    lv_obj_set_style_bg_color(observer_page, ui_bg_color(), 0);
     lv_obj_set_style_border_width(observer_page, 0, 0);
     lv_obj_set_style_pad_all(observer_page, 16, 0);
     lv_obj_set_flex_flow(observer_page, LV_FLEX_FLOW_COLUMN);
@@ -22947,7 +23028,7 @@ static void show_observer_page(void)
     ctx->observer_table = lv_obj_create(ctx->observer_page);
     lv_obj_set_size(ctx->observer_table, lv_pct(100), lv_pct(100));
     lv_obj_set_flex_grow(ctx->observer_table, 1);
-    lv_obj_set_style_bg_color(ctx->observer_table, lv_color_hex(0x0A1A1A), 0);
+    lv_obj_set_style_bg_color(ctx->observer_table, ui_card_color(), 0);
     lv_obj_set_style_border_color(ctx->observer_table, lv_color_hex(0x1A3333), 0);
     lv_obj_set_style_border_width(ctx->observer_table, 1, 0);
     lv_obj_set_style_radius(ctx->observer_table, 12, 0);
@@ -25837,7 +25918,7 @@ static void wardrive_upload_menu_load_task(void *arg)
     ctx->wardrive_upload_menu_loaded = true;
     ctx->wardrive_upload_menu_loading = false;
     ctx->wardrive_upload_menu_task = NULL;
-    lv_async_call(wardrive_upload_menu_load_async_render, ctx);
+    ui_async_call(wardrive_upload_menu_load_async_render, ctx);
     vTaskDelete(NULL);
 }
 
@@ -33397,7 +33478,7 @@ static void wardrive_blacklist_remove_cb(lv_event_t *e)
     if (!r) return;
     r->ctx = ctx;
     snprintf(r->mac, sizeof(r->mac), "%.19s", mac);
-    lv_async_call(wardrive_blacklist_remove_async, r);
+    ui_async_call(wardrive_blacklist_remove_async, r);
 }
 
 static void wardrive_blacklist_add_cb(lv_event_t *e)
@@ -33475,7 +33556,7 @@ static void wardrive_blacklist_scan_pick_cb(lv_event_t *e)
     if (pick->ctx->wardrive_blacklist_input) {
         lv_textarea_set_text(pick->ctx->wardrive_blacklist_input, pick->mac);
     }
-    lv_async_call(wardrive_blacklist_scan_finish_async, pick->ctx);
+    ui_async_call(wardrive_blacklist_scan_finish_async, pick->ctx);
 }
 
 static void wardrive_blacklist_scan_btn_cb(lv_event_t *e)
@@ -33827,7 +33908,7 @@ static void show_wardrive_page(void)
     // Page container
     ctx->wardrive_page = lv_obj_create(container);
     lv_obj_set_size(ctx->wardrive_page, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_color(ctx->wardrive_page, lv_color_hex(0x0A1A1A), 0);
+    lv_obj_set_style_bg_color(ctx->wardrive_page, ui_bg_color(), 0);
     lv_obj_set_style_border_width(ctx->wardrive_page, 0, 0);
     lv_obj_set_style_pad_all(ctx->wardrive_page, 10, 0);
     lv_obj_set_flex_flow(ctx->wardrive_page, LV_FLEX_FLOW_COLUMN);
@@ -34270,7 +34351,7 @@ static void show_antisurv_page(void)
 
     ctx->antisurv_page = lv_obj_create(container);
     lv_obj_set_size(ctx->antisurv_page, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_color(ctx->antisurv_page, lv_color_hex(0x1A0A12), 0);
+    lv_obj_set_style_bg_color(ctx->antisurv_page, ui_bg_color(), 0);
     lv_obj_set_style_border_width(ctx->antisurv_page, 0, 0);
     lv_obj_set_style_pad_all(ctx->antisurv_page, 10, 0);
     lv_obj_set_flex_flow(ctx->antisurv_page, LV_FLEX_FLOW_COLUMN);
@@ -37067,7 +37148,7 @@ static void compromised_files_load_task(void *arg)
     ctx->compromised_files_loaded = true;
     ctx->compromised_files_loading = false;
     ctx->compromised_files_load_task = NULL;
-    lv_async_call(compromised_files_load_async_render, ctx);
+    ui_async_call(compromised_files_load_async_render, ctx);
     vTaskDelete(NULL);
 }
 
@@ -37680,7 +37761,7 @@ static void compromised_cleanup_task(void *arg)
 
     ctx->compromised_cleanup_running = false;
     ctx->compromised_cleanup_task = NULL;
-    lv_async_call(compromised_cleanup_async_refresh, ctx);
+    ui_async_call(compromised_cleanup_async_refresh, ctx);
 
     free(task_args);
     vTaskDelete(NULL);
@@ -43812,7 +43893,7 @@ static void pcap_viewer_load_task(void *arg)
         state->summary_status = state->load_status;
         state->force_reanalyze = false;
         state->task = NULL;
-        lv_async_call(pcap_viewer_render_load_result_async, state);
+        ui_async_call(pcap_viewer_render_load_result_async, state);
         vTaskDelete(NULL);
         return;
     }
@@ -43937,7 +44018,7 @@ static void pcap_viewer_load_task(void *arg)
     }
     state->force_reanalyze = false;
     state->task = NULL;
-    lv_async_call(pcap_viewer_render_load_result_async, state);
+    ui_async_call(pcap_viewer_render_load_result_async, state);
     vTaskDelete(NULL);
 }
 
@@ -48526,7 +48607,7 @@ static void pcap_viewer_artifact_task(void *arg)
     state->artifact_action = PCAP_ARTIFACT_NONE;
     state->artifact_running = false;
     state->artifact_task = NULL;
-    lv_async_call(pcap_viewer_artifact_finish_async, state);
+    ui_async_call(pcap_viewer_artifact_finish_async, state);
     vTaskDelete(NULL);
 }
 
@@ -49065,14 +49146,14 @@ static void pcap_viewer_object_delete_cb(lv_event_t *e)
     uint32_t index = (uint32_t)(encoded - 1U);
     if (index >= state->extract_result->object_count) return;
     pcap_extract_delete_object(state->extract_result, index);
-    lv_async_call(pcap_viewer_show_objects_async, state);
+    ui_async_call(pcap_viewer_show_objects_async, state);
 }
 
 static void pcap_viewer_object_reextract_cb(lv_event_t *e)
 {
     pcap_viewer_state_t *state = (pcap_viewer_state_t *)lv_event_get_user_data(e);
     if (!state) return;
-    lv_async_call(pcap_viewer_start_extraction_async, state);
+    ui_async_call(pcap_viewer_start_extraction_async, state);
 }
 
 static void pcap_viewer_show_objects(pcap_viewer_state_t *state)
@@ -54779,7 +54860,7 @@ static void board_detect_retry_task(void *arg)
         if (board_detect_retry_stop) break;
 
         if (uart1_detected || mbus_detected) {
-            lv_async_call(board_detect_found_async, NULL);
+            ui_async_call(board_detect_found_async, NULL);
             break;
         }
     }
@@ -59687,14 +59768,13 @@ static void show_tool_order_page(void)
         {TO_WIFI_SCAN, LV_SYMBOL_WIFI, enable_red_team ? "WiFi Scan & Attack" : "WiFi Scan & Test", COLOR_MATERIAL_BLUE},
         {TO_GLOBAL_WIFI, LV_SYMBOL_WARNING, enable_red_team ? "Global WiFi Attacks" : "Global WiFi Tests", COLOR_MATERIAL_RED},
         {TO_COMPROMISED, LV_SYMBOL_SAVE, "Compromised Data", COLOR_MATERIAL_GREEN},
-        {TO_DEAUTH, LV_SYMBOL_EYE_OPEN, "Deauth Detector", COLOR_MATERIAL_AMBER},
+        {TO_DEAUTH, LV_SYMBOL_EYE_OPEN, "Detectors", COLOR_MATERIAL_AMBER},
         {TO_BLUETOOTH, LV_SYMBOL_BLUETOOTH, "Bluetooth", COLOR_MATERIAL_CYAN},
         {TO_OBSERVER, LV_SYMBOL_LOOP, "Network Observer", COLOR_MATERIAL_TEAL},
         {TO_KARMA, LV_SYMBOL_WIFI, "Karma", COLOR_MATERIAL_ORANGE},
         {TO_WARDRIVE, LV_SYMBOL_GPS, "Wardrive", COLOR_MATERIAL_TEAL},
-        {TO_ANTISURV, LV_SYMBOL_EYE_OPEN, "Anti-Surv", COLOR_MATERIAL_PINK},
         {TO_MESH, LV_SYMBOL_BARS, "Mesh Recon", COLOR_MATERIAL_PURPLE},
-        {TO_SUBGHZ, LV_SYMBOL_BARS, "Sub-GHz", COLOR_MATERIAL_PINK},
+        {TO_SUBGHZ, LV_SYMBOL_BARS, "Radios", COLOR_MATERIAL_PINK},
         {TO_NFC, LV_SYMBOL_USB, "NFC", COLOR_MATERIAL_CYAN},
         {TO_ANALYZER, LV_SYMBOL_BARS, "WiFi Analyzer", COLOR_MATERIAL_CYAN},
         {TO_AUDITOR, LV_SYMBOL_EYE_OPEN, "WPA PSK Auditor", COLOR_MATERIAL_AMBER},
@@ -59705,10 +59785,121 @@ static void show_tool_order_page(void)
     tool_order_screen_config_t config = {
         .background = ui_bg_color(), .card = ui_card_color(),
         .text = ui_text_color(), .accent = ui_tab_icon_color(),
-        .items = items, .item_count = sizeof(items) / sizeof(items[0]),
+        .items = items, .item_count = sizeof(registry) / sizeof(registry[0]),
         .saved = tool_order_saved
     };
     tool_order_screen_show(&config);
+}
+
+// ---------------------------------------------------------------------------
+// Return to Sentinel (launcher handoff)
+//
+// Under the Sentinel Bootloader the running firmware's partition view has no
+// factory row; the way back to the launcher is to blank otadata and restart, so
+// a blank otadata selects the launcher (sentinel-bootloader docs/firmware-
+// authors.md, "Returning to the launcher"). esp_ota_set_boot_partition(factory)
+// would do nothing here. When the image is flashed on its own (partitions.csv
+// has no otadata row) esp_partition_find_first() returns NULL and this is simply
+// a restart, which is the correct no-op in that case.
+static void return_to_sentinel(void)
+{
+    const esp_partition_t *otadata =
+        esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_OTA, NULL);
+    if (otadata) {
+        esp_err_t err = esp_partition_erase_range(otadata, 0, otadata->size);
+        ESP_LOGW(TAG, "Return to Sentinel: erased otadata (%s)", esp_err_to_name(err));
+    } else {
+        ESP_LOGW(TAG, "Return to Sentinel: no otadata partition; restarting in place");
+    }
+
+    // Same teardown as the screen-rotation restart: mute the codec and black the
+    // panel before esp_restart() drops the MIPI-DSI mid-frame, so the handoff to
+    // the launcher does not flash a frame of undefined framebuffer.
+    audio_silence_for_restart();
+    set_brightness_gamma(0);
+    vTaskDelay(pdMS_TO_TICKS(60));
+    esp_restart();
+}
+
+static void return_to_sentinel_cancel_cb(lv_event_t *e)
+{
+    lv_obj_t *overlay = (lv_obj_t *)lv_event_get_user_data(e);
+    if (overlay) lv_obj_del(overlay);
+}
+
+static void return_to_sentinel_confirm_cb(lv_event_t *e)
+{
+    lv_obj_t *overlay = (lv_obj_t *)lv_event_get_user_data(e);
+    if (overlay) lv_obj_del(overlay);
+    return_to_sentinel();
+}
+
+static void show_return_to_sentinel_popup(void)
+{
+    lv_obj_t *scr = lv_scr_act();
+
+    lv_obj_t *overlay = lv_obj_create(scr);
+    lv_obj_remove_style_all(overlay);
+    lv_obj_set_size(overlay, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(overlay, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(overlay, LV_OPA_70, 0);
+    lv_obj_clear_flag(overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(overlay, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *popup = lv_obj_create(overlay);
+    lv_obj_set_size(popup, 560, 330);
+    lv_obj_center(popup);
+    lv_obj_set_style_bg_color(popup, lv_color_hex(0x2D2D2D), 0);
+    lv_obj_set_style_border_color(popup, COLOR_LAB5_MAGENTA, 0);
+    lv_obj_set_style_border_width(popup, 3, 0);
+    lv_obj_set_style_radius(popup, 16, 0);
+    lv_obj_set_style_pad_all(popup, 24, 0);
+    lv_obj_set_flex_flow(popup, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(popup, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(popup, 14, 0);
+    lv_obj_clear_flag(popup, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *icon = lv_label_create(popup);
+    lv_label_set_text(icon, LV_SYMBOL_HOME);
+    lv_obj_set_style_text_font(icon, &lv_font_montserrat_36, 0);
+    lv_obj_set_style_text_color(icon, COLOR_LAB5_MAGENTA, 0);
+
+    lv_obj_t *title = lv_label_create(popup);
+    lv_label_set_text(title, "Return to Sentinel");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
+
+    lv_obj_t *message = lv_label_create(popup);
+    lv_label_set_text(message,
+        "Close this app and start the Sentinel launcher?\n"
+        "Your saved settings are kept.");
+    lv_obj_set_style_text_font(message, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(message, lv_color_hex(0xCCCCCC), 0);
+    lv_obj_set_style_text_align(message, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(message, 500);
+
+    lv_obj_t *return_btn = lv_btn_create(popup);
+    lv_obj_set_size(return_btn, 300, 48);
+    lv_obj_set_style_bg_color(return_btn, COLOR_LAB5_MAGENTA, 0);
+    lv_obj_set_style_radius(return_btn, 8, 0);
+    lv_obj_add_event_cb(return_btn, return_to_sentinel_confirm_cb, LV_EVENT_CLICKED, overlay);
+
+    lv_obj_t *return_label = lv_label_create(return_btn);
+    lv_label_set_text(return_label, LV_SYMBOL_HOME "  Return to Sentinel");
+    lv_obj_set_style_text_font(return_label, &lv_font_montserrat_16, 0);
+    lv_obj_center(return_label);
+
+    lv_obj_t *cancel_btn = lv_btn_create(popup);
+    lv_obj_set_size(cancel_btn, 140, 46);
+    lv_obj_set_style_bg_color(cancel_btn, COLOR_MATERIAL_PURPLE, 0);
+    lv_obj_set_style_radius(cancel_btn, 8, 0);
+    lv_obj_add_event_cb(cancel_btn, return_to_sentinel_cancel_cb, LV_EVENT_CLICKED, overlay);
+    app_keyboard_navigation_register_escape(cancel_btn);
+
+    lv_obj_t *cancel_label = lv_label_create(cancel_btn);
+    lv_label_set_text(cancel_label, LV_SYMBOL_CLOSE " Cancel");
+    lv_obj_set_style_text_font(cancel_label, &lv_font_montserrat_16, 0);
+    lv_obj_center(cancel_label);
 }
 
 static void settings_tile_event_cb(lv_event_t *e)
@@ -59742,6 +59933,8 @@ static void settings_tile_event_cb(lv_event_t *e)
         show_sd_admin_page();
     } else if (strcmp(tile_name, "Transfer Speed") == 0) {
         show_ft_baud_popup();
+    } else if (strcmp(tile_name, "Return to Sentinel") == 0) {
+        show_return_to_sentinel_popup();
     }
 }
 
@@ -59861,6 +60054,10 @@ static void show_settings_page(void)
 
     // Console rate used while copying a file off the Monster SD.
     create_tile(tiles, LV_SYMBOL_SHUFFLE, "Transfer\nSpeed", COLOR_MATERIAL_PURPLE, settings_tile_event_cb, "Transfer Speed");
+
+    // Hand back to the Sentinel launcher: blanks otadata and restarts. Placed in
+    // Settings (not near the "Home networks" button, which also uses LV_SYMBOL_HOME).
+    create_tile(tiles, LV_SYMBOL_HOME, "Return to\nSentinel", COLOR_LAB5_MAGENTA, settings_tile_event_cb, "Return to Sentinel");
 }
 
 #define SD_ADMIN_STOPPED   0
@@ -66553,7 +66750,7 @@ static void hs_crack_dismiss_cb(lv_event_t *e)
     if (hs_crack_ui.overlay && lv_obj_is_valid(hs_crack_ui.overlay))
         lv_obj_del(hs_crack_ui.overlay);
     if (refresh_auditor &&
-        lv_async_call(hs_crack_refresh_auditor_after_queue_async, NULL) !=
+        ui_async_call(hs_crack_refresh_auditor_after_queue_async, NULL) !=
             LV_RESULT_OK) {
         ESP_LOGW(TAG, "[HS-AUDIT] could not schedule refresh after enqueue");
     }
@@ -68235,7 +68432,7 @@ finish:
     if (batch_managed) {
         uintptr_t packed = ((uintptr_t)batch_item_index << 4U) |
                            ((uintptr_t)batch_outcome & 0x0fU);
-        if (lv_async_call(wpa_auditor_batch_crack_complete_async,
+        if (ui_async_call(wpa_auditor_batch_crack_complete_async,
                           (void *)(packed + 1U)) != LV_RESULT_OK) {
             ESP_LOGE(TAG, "[HS-BATCH] completion callback unavailable; pausing batch");
             if (wpa_auditor_batch &&
@@ -69308,7 +69505,7 @@ static void wpa_auditor_delete_audit_task(void *argument)
 
     wpa_auditor_delete_audit_task_handle = NULL;
     if (args) {
-        if (lv_async_call(wpa_auditor_delete_audit_finish_async, args) !=
+        if (ui_async_call(wpa_auditor_delete_audit_finish_async, args) !=
             LV_RESULT_OK) {
             free(args);
         }
@@ -71736,7 +71933,7 @@ static void wpa_auditor_catalog_task(void *argument)
         lv_obj_clear_state(wpa_auditor_catalog_scan_btn, LV_STATE_DISABLED);
     bsp_display_unlock();
     if (start_sync_after_refresh &&
-        lv_async_call(wpa_auditor_catalog_sync_after_refresh_async, NULL) !=
+        ui_async_call(wpa_auditor_catalog_sync_after_refresh_async, NULL) !=
             LV_RESULT_OK) {
         wpa_auditor_sync_after_refresh = false;
         bsp_display_lock(0);
@@ -71749,7 +71946,7 @@ static void wpa_auditor_catalog_task(void *argument)
         bsp_display_unlock();
     }
     if (enqueue_batch_after_refresh &&
-        lv_async_call(wpa_auditor_batch_enqueue_after_refresh_async, NULL) !=
+        ui_async_call(wpa_auditor_batch_enqueue_after_refresh_async, NULL) !=
             LV_RESULT_OK) {
         wpa_auditor_batch_enqueue_after_sync = false;
         wpa_auditor_pending_selection_count = 0;
@@ -72036,7 +72233,7 @@ static void wpa_auditor_storage_task(void *argument)
              (unsigned)session_count, (int)session_result,
              (unsigned)history_count, (int)history_result, batch_ready,
              (unsigned)uxTaskGetStackHighWaterMark(NULL));
-    if (lv_async_call(wpa_auditor_storage_ready_async, NULL) != LV_RESULT_OK)
+    if (ui_async_call(wpa_auditor_storage_ready_async, NULL) != LV_RESULT_OK)
         ESP_LOGW(TAG, "[HS-AUDIT] could not schedule dashboard render");
     vTaskDeleteWithCaps(NULL);
 }
