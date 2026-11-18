@@ -88,6 +88,9 @@ CONFIG_LV_USE_PERF_MONITOR=y
 # CH34X uses a 32-byte BULK IN endpoint.  Keep the submitted host transfer at
 # one endpoint packet so a full 32-byte ACK32 completes immediately instead of
 # waiting for a short packet or for the component's default 512-byte request.
+# Bridges with a 64-byte BULK IN endpoint (CH343, CH9102) get the transfer
+# rounded up to 64 by iot_usbh_cdc.c: the host stack refuses an IN transfer that
+# is not a whole number of packets, and the app aborted as the bridge connected.
 CONFIG_IN_TRANSFER_BUFFER_SIZE=32
 CONFIG_LV_FONT_MONTSERRAT_8=y
 CONFIG_LV_FONT_MONTSERRAT_10=y

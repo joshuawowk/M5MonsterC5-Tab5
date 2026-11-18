@@ -651,9 +651,25 @@ static esp_err_t _cdc_transfers_allocate(usbh_cdc_t *cdc, const usb_ep_desc_t *n
     cdc->ctrl.mux = xSemaphoreCreateMutex();
     ESP_GOTO_ON_FALSE(cdc->ctrl.mux, ESP_ERR_NO_MEM, err, TAG,);
 
-    const size_t in_buf_len = CONFIG_IN_TRANSFER_BUFFER_SIZE;
+    size_t in_buf_len = CONFIG_IN_TRANSFER_BUFFER_SIZE;
     if (in_ep_desc) {
-        ESP_LOGD(TAG, "in ep mps: %d", USB_EP_DESC_GET_MPS(in_ep_desc));
+        const size_t in_mps = USB_EP_DESC_GET_MPS(in_ep_desc);
+        ESP_LOGD(TAG, "in ep mps: %d", (int)in_mps);
+        /* The host stack takes only whole endpoint packets for a bulk or interrupt IN
+         * transfer ("IN transfer num_bytes not integer multiple of MPS"), and the first
+         * submit is ESP_ERROR_CHECKed, so a size that is not a multiple aborts the app as
+         * soon as the device connects. CONFIG_IN_TRANSFER_BUFFER_SIZE is one CH340/CH341
+         * packet (32 bytes); a CH343 or CH9102 bridge has a 64-byte bulk IN endpoint.
+         * Round up to the endpoint's packet size: a CH34x keeps its one-packet transfer,
+         * and on a 64-byte endpoint a 32-byte ACK32 is a short packet, which completes
+         * the transfer just as immediately. */
+        if (in_buf_len > 0 && in_mps > 0 && in_buf_len % in_mps != 0) {
+            const size_t rounded = (in_buf_len + in_mps - 1) / in_mps * in_mps;
+            ESP_LOGW(TAG, "IN transfer %u bytes rounded up to %u (endpoint 0x%02x MPS %u)",
+                     (unsigned)in_buf_len, (unsigned)rounded,
+                     in_ep_desc->bEndpointAddress, (unsigned)in_mps);
+            in_buf_len = rounded;
+        }
         if (in_buf_len > 0) {
             ESP_GOTO_ON_ERROR(
                 usb_host_transfer_alloc(in_buf_len, 0, &cdc->data.in_xfer),

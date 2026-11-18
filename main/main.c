@@ -4908,6 +4908,7 @@ static bool usb_debug_logs = true;
 static bool usb_cdc_preferred_valid = false;
 static bool usb_cdc_driver_installed = false;
 static uint8_t usb_cdc_preferred_itf = 0;
+static int usb_cdc_acm_comm_itf = -1;   // CDC-ACM communication interface, -1 = none
 static uint16_t usb_last_vid = 0;
 static uint16_t usb_last_pid = 0;
 static bool usb_gps_fix_valid = false;
@@ -5094,6 +5095,58 @@ static bool ch34x_init_port_115200(void)
     return true;
 }
 
+#define USB_ESPRESSIF_VID           0x303A
+#define CDC_REQTYPE_CLASS_ITF_OUT   0x21
+#define CDC_REQTYPE_CLASS_ITF_IN    0xA1
+#define CDC_REQ_SET_LINE_CODING     0x20
+#define CDC_REQ_GET_LINE_CODING     0x21
+
+/* A CDC-ACM bridge (a CH343 or CH9102 on the Monster's UART port, for one) runs its
+ * UART at whatever line coding it last had - its power-on default, 9600 8N1 on WCH
+ * parts - until a host sets one. Nothing set it on this path, so "ping" reached JanOS
+ * (115200) as noise and nothing came back. Espressif's own USB-Serial-JTAG is not a
+ * UART bridge and STALLs these requests, so it is never sent them. */
+static bool usb_cdc_acm_needs_line_coding(void)
+{
+    return usb_cdc_acm_comm_itf >= 0 && usb_last_vid != USB_ESPRESSIF_VID && !usb_is_known_gps;
+}
+
+static bool cdc_acm_init_port_115200(void)
+{
+    if (!usb_cdc_handle) return false;
+    const uint16_t itf = (uint16_t)usb_cdc_acm_comm_itf;
+    uint8_t coding[7] = {0};
+    esp_err_t err = usbh_cdc_send_custom_request(usb_cdc_handle, CDC_REQTYPE_CLASS_ITF_IN,
+                                                 CDC_REQ_GET_LINE_CODING, 0, itf,
+                                                 sizeof(coding), coding);
+    if (err == ESP_OK) {
+        uint32_t was = (uint32_t)coding[0] | ((uint32_t)coding[1] << 8) |
+                       ((uint32_t)coding[2] << 16) | ((uint32_t)coding[3] << 24);
+        ESP_LOGI(TAG, "[USB][CDC] bridge line coding was %lu baud, %u data bits, parity %u, stop %u",
+                 (unsigned long)was, (unsigned)coding[6], (unsigned)coding[5], (unsigned)coding[4]);
+    } else {
+        ESP_LOGW(TAG, "[USB][CDC] GET_LINE_CODING failed: %s", esp_err_to_name(err));
+    }
+
+    const uint32_t baud = UART_BAUD_RATE;
+    uint8_t want[7] = {
+        (uint8_t)(baud & 0xFF), (uint8_t)((baud >> 8) & 0xFF),
+        (uint8_t)((baud >> 16) & 0xFF), (uint8_t)((baud >> 24) & 0xFF),
+        0,      /* bCharFormat: 1 stop bit */
+        0,      /* bParityType: none */
+        8,      /* bDataBits */
+    };
+    err = usbh_cdc_send_custom_request(usb_cdc_handle, CDC_REQTYPE_CLASS_ITF_OUT,
+                                       CDC_REQ_SET_LINE_CODING, 0, itf, sizeof(want), want);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "[USB][CDC] SET_LINE_CODING %u 8N1 failed: %s",
+                 (unsigned)baud, esp_err_to_name(err));
+        return false;
+    }
+    ESP_LOGI(TAG, "[USB][CDC] Fixed console configured: %u 8N1 itf=%u", (unsigned)baud, (unsigned)itf);
+    return true;
+}
+
 static void usb_vcp_config_task(void *arg)
 {
     usbh_cdc_handle_t connected_handle = (usbh_cdc_handle_t)arg;
@@ -5106,6 +5159,8 @@ static void usb_vcp_config_task(void *arg)
         } else if (usb_last_vid == CP210X_VID) {
             cp210x_init_port(usb_cdc_preferred_itf);
             configured = true;
+        } else if (usb_cdc_acm_needs_line_coding()) {
+            configured = cdc_acm_init_port_115200();
         } else {
             ESP_LOGI(TAG, "[USB] VCP does not require a vendor-specific baud setup");
             configured = true;
@@ -5152,6 +5207,7 @@ static void usb_cdc_new_dev_cb(usb_device_handle_t usb_dev, void *user_data)
     usb_is_known_gps = (usb_last_vid == USB_GPS_KNOWN_VID && usb_last_pid == USB_GPS_KNOWN_PID);
     usb_cdc_preferred_valid = false;
     usb_cdc_preferred_itf = 0;
+    usb_cdc_acm_comm_itf = -1;
 
     int desc_offset = 0;
     const usb_standard_desc_t *this_desc = (const usb_standard_desc_t *)config_desc;
@@ -5160,6 +5216,12 @@ static void usb_cdc_new_dev_cb(usb_device_handle_t usb_dev, void *user_data)
                                                          USB_B_DESCRIPTOR_TYPE_INTERFACE,
                                                          &desc_offset))) {
         const usb_intf_desc_t *intf_desc = (const usb_intf_desc_t *)this_desc;
+        // CDC-ACM communication interface (class 0x02, subclass 0x02): the one that takes
+        // SET_LINE_CODING. It comes before its data interface.
+        if (intf_desc->bInterfaceClass == USB_CLASS_COMM && intf_desc->bInterfaceSubClass == 0x02 &&
+            usb_cdc_acm_comm_itf < 0) {
+            usb_cdc_acm_comm_itf = intf_desc->bInterfaceNumber;
+        }
         if (intf_desc->bInterfaceClass == USB_CLASS_CDC_DATA) {
             usb_cdc_preferred_itf = intf_desc->bInterfaceNumber;
             usb_cdc_preferred_valid = true;
