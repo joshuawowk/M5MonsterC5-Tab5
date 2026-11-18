@@ -95,7 +95,9 @@ jobs:
   pages:
     name: Deploy Pages Only
     needs: route
-    if: needs.route.outputs.deploy == 'true'
+    # Only where GitHub Pages is set up (see the same guard in esp32p4-build-master.yml):
+    # without a Pages site, configure-pages cannot create one with GITHUB_TOKEN.
+    if: needs.route.outputs.deploy == 'true' && github.event.repository.has_pages
     runs-on: ubuntu-24.04
     permissions:
       contents: read
