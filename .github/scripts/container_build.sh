@@ -40,8 +40,26 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# The component manager's "new versions available" check solves the dependencies
+# again against the live registry, after the lock file has already been accepted.
+# The manager in espressif/idf:v5.4.1 (2.1.2) cannot read newer registry manifests
+# that use $CONFIG{...} conditions (esp_hosted's ESP_HOSTED_HOST_USB_CHERRYUSB_MANIFEST)
+# and aborts the build with 'Environment variable "CONFIG" is not set'. The build
+# uses what dependencies.lock pins either way, so the check is off unless asked for.
+export IDF_COMPONENT_CHECK_NEW_VERSION="${IDF_COMPONENT_CHECK_NEW_VERSION:-0}"
+
+# In a container the checkout belongs to another user, so git refuses it ("dubious
+# ownership") and ESP-IDF falls back to PROJECT_VER "1". Trust the checkout for this
+# process only (no global git config is written), so the build carries git describe.
+trust_checkout() {
+  export GIT_CONFIG_COUNT=1
+  export GIT_CONFIG_KEY_0=safe.directory
+  export GIT_CONFIG_VALUE_0="$1"
+}
+
 build_native() {
   cd "$APP_DIR"
+  trust_checkout "$(pwd)"
   export IDF_TARGET=esp32p4
   if [ -f /opt/esp/idf/export.sh ]; then
     # shellcheck disable=SC1091
@@ -65,6 +83,10 @@ docker run --rm \
   --workdir /project \
   --env IDF_TARGET=esp32p4 \
   --env IDF_PY_FLAGS="${IDF_PY_FLAGS:-}" \
+  --env IDF_COMPONENT_CHECK_NEW_VERSION \
+  --env GIT_CONFIG_COUNT=1 \
+  --env GIT_CONFIG_KEY_0=safe.directory \
+  --env GIT_CONFIG_VALUE_0=/project \
   --volume "${APP_DIR}:/project" \
   --volume "${CACHE_DIR}:/root/.espressif" \
   "$IMAGE" \
