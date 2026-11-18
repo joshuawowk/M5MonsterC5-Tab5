@@ -310,7 +310,11 @@ jobs:
   pages:
     name: Pages Web Flasher
     needs: [release, firmware]
-    if: ${{ needs.release.result == 'success' }}
+    # Only where GitHub Pages is set up: on a repository without a Pages site,
+    # configure-pages cannot create one with GITHUB_TOKEN ("Create Pages site
+    # failed: Resource not accessible by integration") and failed the run after
+    # the release had already been published.
+    if: ${{ needs.release.result == 'success' && github.event.repository.has_pages }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
