@@ -76,6 +76,16 @@ APP_DESC_OFFSET = 0x20             # esp_app_desc_t, after the image + first seg
 APP_DESC_MAGIC = 0xABCD5432
 FLASH_SIZE = 16 * MIB
 
+# --- Sentinel Bootloader "Update from GitHub" descriptor -------------------
+# components/sentinel_app/include/sentinel_app.h emits a fixed 256-byte
+# sentinel_app_info_t block into .rodata_custom_desc, straight after
+# esp_app_desc_t, at image offset 0x120. Sentinel reads it to offer an
+# in-launcher update from the named GitHub repository's latest release.
+SENTINEL_APP_INFO_OFFSET = 0x120   # SENTINEL_APP_INFO_OFFSET (sentinel_app.h)
+SENTINEL_APP_INFO_MAGIC = 0x50414E53  # "SNAP"
+SENTINEL_APP_INFO_VERSION = 1
+SENTINEL_APP_INFO_SIZE = 256
+
 # --- Launcher constants -----------------------------------------------------
 # LAUNCHER_DEFAULT_SPIFFS_SIZE is set at runtime by launcherPartitionInitDefaultSizes()
 # (src/partition_table_model.cpp): 0x20000 for <=4 MB flash, 0x70000 above it.
@@ -416,6 +426,27 @@ def launcher_identity(file_name: str) -> dict:
     return {"stem": stem, "name": name, "label": label, "icon": name[:5].upper()}
 
 
+def sentinel_app_info(data: bytes, app_offset: int) -> dict | None:
+    """Decode the Sentinel "Update from GitHub" descriptor carried by the app image.
+
+    Returns {"repo", "asset"} when a well-formed SNAP block sits at
+    app_offset + 0x120, {"error": ...} when the magic is present but the block is
+    malformed, or None when there is no descriptor at all.
+    """
+    base = app_offset + SENTINEL_APP_INFO_OFFSET
+    if base + SENTINEL_APP_INFO_SIZE > len(data):
+        return None
+    magic, version, size = struct.unpack_from("<IHH", data, base)
+    if magic != SENTINEL_APP_INFO_MAGIC:
+        return None
+    if version != SENTINEL_APP_INFO_VERSION or size != SENTINEL_APP_INFO_SIZE:
+        return {"error": f"SNAP block has version={version} size={size} "
+                         f"(expected {SENTINEL_APP_INFO_VERSION}/{SENTINEL_APP_INFO_SIZE})"}
+    repo = data[base + 8:base + 8 + 120].split(b"\x00", 1)[0].decode("utf-8", "replace")
+    asset = data[base + 128:base + 128 + 64].split(b"\x00", 1)[0].decode("utf-8", "replace")
+    return {"repo": repo, "asset": asset}
+
+
 # ------------------------------------------------------------- reporting --
 
 def report(path: Path, data: bytes, plan: dict) -> None:
@@ -429,6 +460,16 @@ def report(path: Path, data: bytes, plan: dict) -> None:
     print(f"\n  app  : '{app['label']}' @ 0x{app['offset']:06X}, "
           f"0x{app['size']:X} ({app['size']:,} B) via {app['how']}")
     print(f"         version {app_version(data, app['offset'])}")
+
+    sentinel = sentinel_app_info(data, app["offset"])
+    if sentinel is None:
+        print("         Sentinel update: no descriptor -- the Sentinel launcher will not "
+              "offer an in-launcher GitHub update (add components/sentinel_app)")
+    elif "error" in sentinel:
+        print(f"         Sentinel update: WARNING malformed descriptor -- {sentinel['error']}")
+    else:
+        print(f"         Sentinel update: {sentinel['repo']} "
+              f"asset '{sentinel['asset'] or '(auto)'}'")
 
     app_partition = align_up(app["size"], LAUNCHER_APP_PARTITION_ALIGNMENT)
     needed = app_partition

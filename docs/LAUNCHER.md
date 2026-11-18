@@ -1,5 +1,10 @@
 # Installing M5MonsterC5-Tab5 with M5StackLauncher
 
+> [!NOTE]
+> This page covers **bmorcelli/M5StackLauncher**. The Tab5's current launcher is the
+> **Sentinel Bootloader** — see [SENTINEL.md](SENTINEL.md). On a Sentinel-managed Tab5, install
+> with `sentinelctl.py`, not this repo's `tools/launcher_serial_install.py`.
+
 [M5StackLauncher](https://github.com/joshuawowk/M5StackLauncher) turns the Tab5 into a
 multi-firmware device: it keeps itself in the factory slot, installs each firmware into its
 own OTA partition, and boots whichever one you pick. This document covers packaging
@@ -192,3 +197,9 @@ log lines are normal: its settings namespace does not exist until it saves somet
 lives on a different chip and is not part of the Launcher package — flash it once with
 `wifi_c6_fw/flash.sh`. Likewise the MonsterC5 add-on board runs JanOS, flashed via
 <https://c5lab.github.io/projectZero/janos_flash.html>.
+
+> [!WARNING]
+> Under the **Sentinel launcher** the C6 runs one shared slave firmware (2.12.x) for every app.
+> Do **not** run `wifi_c6_fw/flash.sh` on a Sentinel-managed Tab5 — it writes an older image and
+> can break Wi-Fi for Sentinel and every other app. See [SENTINEL.md](SENTINEL.md). The script
+> now asks for confirmation before flashing.
