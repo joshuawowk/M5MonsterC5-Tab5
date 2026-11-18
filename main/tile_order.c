@@ -3,7 +3,10 @@
 
 void tile_order_default(tile_order_group_t group, tile_order_t *order)
 {
-    static const uint8_t monster[] = {1,2,3,4,5,6,7,8,9,10,11,12,13};
+    /* TO_ANTISURV (9) dropped: Anti-Surv is no longer a home tile (it lives in the
+     * Detectors submenu). Old saved blobs that still contain 9 are filtered by
+     * tile_order_decode(), which keeps only IDs present in this default set. */
+    static const uint8_t monster[] = {1,2,3,4,5,6,7,8,10,11,12,13};
     static const uint8_t internal[] = {TO_AUDITOR, TO_SETTINGS, TO_ADHOC};
     memset(order, 0, sizeof(*order));
     if (group == TO_MONSTER) {

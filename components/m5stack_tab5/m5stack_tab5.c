@@ -7,6 +7,8 @@
 #include "sdkconfig.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "driver/sdspi_host.h"
+#include "driver/spi_common.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_check.h"
@@ -552,6 +554,86 @@ void bsp_reset_tp()
 
 static sdmmc_card_t* card;
 
+// Which bus the card is currently mounted on, so bsp_sdcard_deinit() can tear
+// down correctly. SPI is only ever used as a fallback when SDMMC times out
+// (card left in SPI mode by a previous firmware); see bsp_sdcard_init().
+typedef enum {
+    BSP_SD_MODE_NONE = 0,
+    BSP_SD_MODE_SDMMC,
+    BSP_SD_MODE_SPI,
+} bsp_sd_mode_t;
+static bsp_sd_mode_t s_sd_mode = BSP_SD_MODE_NONE;
+
+// SPI fallback host. esp_hosted uses the SDMMC controller on slot 1; this uses
+// the independent SPI3 peripheral, so the two never contend for the bus.
+#define BSP_SD_SPI_HOST SPI3_HOST
+
+/* SPI-mode fallback mount.
+ *
+ * A microSD card that a previous firmware left in SPI mode ignores SD-mode
+ * (SDMMC) initialization until it is power-cycled, and this board has no switch
+ * on the card's supply -- so an SDMMC mount of such a card times out
+ * (ESP_ERR_TIMEOUT / 0x107) forever. The recovery is to talk SPI to it instead.
+ *
+ * The LDO power-control handle MUST be the same one the SDMMC path already
+ * acquired (same on-chip LDO channel feeds the SD I/O pads); it is passed in
+ * rather than re-acquired here so we never double-acquire the channel.
+ *
+ * On any failure this frees the SPI bus and leaves no state behind, so the
+ * caller (and the 5 s remount poll) can retry cleanly. */
+static esp_err_t bsp_sdcard_mount_spi(const char* mount_point, size_t max_files,
+                                      sd_pwr_ctrl_handle_t pwr_ctrl_handle)
+{
+    ESP_LOGW(TAG, "SDMMC timed out (card may be stuck in SPI mode); trying SPI fallback on SPI%d", BSP_SD_SPI_HOST + 1);
+
+    /* The failed SD-mode attempt left the pins bound to the SDMMC function;
+     * release them so the SPI peripheral can drive them. */
+    const int sd_pins[] = {GPIO_SDMMC_CLK, GPIO_SDMMC_CMD, GPIO_SDMMC_D0, GPIO_SDMMC_D1, GPIO_SDMMC_D2, GPIO_SDMMC_D3};
+    for (size_t i = 0; i < sizeof(sd_pins) / sizeof(sd_pins[0]); i++) {
+        gpio_reset_pin(sd_pins[i]);
+    }
+
+    sdmmc_host_t host    = SDSPI_HOST_DEFAULT();
+    host.slot            = BSP_SD_SPI_HOST;
+    host.max_freq_khz    = SDMMC_FREQ_DEFAULT;  // 20 MHz; SPI mode is slow anyway
+    host.pwr_ctrl_handle = pwr_ctrl_handle;     // reuse the SDMMC path's LDO handle
+
+    spi_bus_config_t bus_cfg = {
+        .mosi_io_num     = GPIO_SDMMC_CMD,  // CMD (44)
+        .miso_io_num     = GPIO_SDMMC_D0,   // D0  (39)
+        .sclk_io_num     = GPIO_SDMMC_CLK,  // CLK (43)
+        .quadwp_io_num   = -1,
+        .quadhd_io_num   = -1,
+        .max_transfer_sz = 4096,
+    };
+    esp_err_t ret_val = spi_bus_initialize(BSP_SD_SPI_HOST, &bus_cfg, SDSPI_DEFAULT_DMA);
+    if (ret_val != ESP_OK) {
+        ESP_LOGE(TAG, "SPI bus init failed (%s)", esp_err_to_name(ret_val));
+        return ret_val;
+    }
+
+    sdspi_device_config_t dev_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
+    dev_cfg.gpio_cs               = GPIO_SDMMC_D3;  // CS = D3 (42)
+    dev_cfg.host_id               = BSP_SD_SPI_HOST;
+
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+        .format_if_mount_failed = false, .max_files = max_files, .allocation_unit_size = 16 * 1024};
+
+    ret_val = esp_vfs_fat_sdspi_mount(mount_point, &host, &dev_cfg, &mount_config, &card);
+    if (ret_val != ESP_OK) {
+        /* Leave nothing behind so the next poll can retry from scratch. */
+        card = NULL;
+        spi_bus_free(BSP_SD_SPI_HOST);
+        ESP_LOGW(TAG, "SPI fallback mount failed (%s)", esp_err_to_name(ret_val));
+        return ret_val;
+    }
+
+    s_sd_mode = BSP_SD_MODE_SPI;
+    ESP_LOGI(TAG, "SD card mounted in SPI mode on SPI%d", BSP_SD_SPI_HOST + 1);
+    sdmmc_card_print_info(stdout, card);
+    return ESP_OK;
+}
+
 esp_err_t bsp_sdcard_init(char* mount_point, size_t max_files)
 {
     esp_err_t ret_val = ESP_OK;
@@ -652,14 +734,49 @@ esp_err_t bsp_sdcard_init(char* mount_point, size_t max_files)
             ESP_LOGE(TAG,
                      "Failed to mount filesystem: the card is likely exFAT/SDXC or unformatted. "
                      "Reformat it FAT32 (<=32 GB) to use it.");
-        } else {
+            return ret_val;
+        }
+
+        if (ret_val == ESP_ERR_TIMEOUT) {
+            /* No SD-mode answer on any attempt. Either the slot is empty, or a
+             * previous firmware left the card in SPI mode. The latter can only be
+             * recovered by talking SPI, reusing the LDO handle the SDMMC path
+             * already acquired above (do NOT power the card differently). If the
+             * slot is simply empty, the SPI mount fails too and we fall through. */
+            card = NULL;  // clear any state a failed SDMMC attempt left behind
+            esp_err_t spi_ret = bsp_sdcard_mount_spi(mount_point, max_files, host.pwr_ctrl_handle);
+            if (spi_ret == ESP_OK) {
+                return ESP_OK;
+            }
+            card = NULL;
+            if (spi_ret == ESP_FAIL) {
+                /* The card answered over SPI but its filesystem could not be
+                 * mounted: it is exFAT/SDXC or unformatted, not stuck or absent.
+                 * Report that so the user reformats rather than chasing wiring. */
+                ESP_LOGE(TAG,
+                         "Failed to mount filesystem (SPI mode): the card is likely exFAT/SDXC or "
+                         "unformatted. Reformat it FAT32 (<=32 GB) to use it.");
+                return ESP_FAIL;
+            }
+            /* SPI fallback also failed to initialize the card (empty slot, or a
+             * card that answers on neither bus). Report the original timeout so
+             * the (common) empty-slot case logs identically to before. */
             ESP_LOGE(TAG,
-                     "Failed to initialize the card (%s). "
+                     "Failed to initialize the card (%s) over SDMMC or SPI. "
                      "Make sure SD card lines have pull-up resistors in place.",
                      esp_err_to_name(ret_val));
+            return ret_val;
         }
+
+        ESP_LOGE(TAG,
+                 "Failed to initialize the card (%s). "
+                 "Make sure SD card lines have pull-up resistors in place.",
+                 esp_err_to_name(ret_val));
         return ret_val;
     }
+
+    /* SDMMC mount succeeded. */
+    s_sd_mode = BSP_SD_MODE_SDMMC;
 
     /* Card has been initialized, print its properties. */
     sdmmc_card_print_info(stdout, card);
@@ -679,8 +796,18 @@ esp_err_t bsp_sdcard_deinit(char* mount_point)
         return ESP_ERR_INVALID_STATE;
     }
 
+    /* Snapshot the bus mode before unmount; esp_vfs_fat_sdcard_unmount() is
+     * bus-agnostic (it works off the card handle) and tears down the host the
+     * mount created, but on the SPI path the SPI *bus* was initialized
+     * separately by bsp_sdcard_mount_spi() and must be freed here too. */
+    bsp_sd_mode_t mode = s_sd_mode;
+
     /* Unmount an SD card from the FAT filesystem and release resources acquired */
     esp_err_t ret_val = esp_vfs_fat_sdcard_unmount(mount_point, card);
+
+    if (mode == BSP_SD_MODE_SPI) {
+        spi_bus_free(BSP_SD_SPI_HOST);
+    }
 
     // ret_val = sd_pwr_ctrl_del_on_chip_ldo(card->host.pwr_ctrl_handle);
     // if (ret_val != ESP_OK) {
@@ -688,7 +815,8 @@ esp_err_t bsp_sdcard_deinit(char* mount_point)
     // }
 
     /* Make SD/MMC card information structure pointer NULL */
-    card = NULL;
+    card      = NULL;
+    s_sd_mode = BSP_SD_MODE_NONE;
 
     return ret_val;
 }
