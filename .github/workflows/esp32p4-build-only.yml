@@ -12,6 +12,9 @@ on:
 jobs:
   firmware:
     name: M5MonsterC5-Tab5
+    # The self-hosted runner is C5Lab's. A fork has none, so the job sat queued for
+    # 24 hours and was cancelled on every push there; ESP32P4 Build covers forks.
+    if: github.repository == 'C5Lab/M5MonsterC5-Tab5'
     permissions:
       contents: read
     runs-on: [self-hosted, linux, x64]
