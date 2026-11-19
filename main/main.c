@@ -1944,6 +1944,19 @@ static void style_popup_card(lv_obj_t *popup, lv_coord_t radius, lv_color_t acce
     lv_obj_set_style_shadow_width(popup, dark_mode_enabled ? 20 : 10, 0);
     lv_obj_set_style_shadow_color(popup, lv_color_hex(0x000000), 0);
     lv_obj_set_style_shadow_opa(popup, dark_mode_enabled ? LV_OPA_30 : LV_OPA_20, 0);
+
+    // Cap every modal card to a fraction of its parent so a card hand-tuned for
+    // the 1280 px portrait height can't run off both edges in a 90/270 landscape
+    // and hide its close button under the tab bar or its action row below the
+    // screen (issue #2 "menus cut off top and bottom"). A percentage resolves
+    // against each card's actual parent (the tab container at ~590 px, or the
+    // full-screen top layer), so container-parented and layer-top popups both
+    // get a correct margin without over-shrinking either. max_height only ever
+    // SHRINKS an oversize card; one that already fits is untouched, and because
+    // these cards are lv_obj_center'd the clamp keeps them centred. Scrollable
+    // cards then reach the rest of their content; scroll flags are left exactly
+    // as each popup set them.
+    lv_obj_set_style_max_height(popup, lv_pct(92), 0);
 }
 
 // True when the screen is wide enough to run in one line what portrait has to
