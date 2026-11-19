@@ -4387,29 +4387,21 @@ static void update_home_dashboard_labels(tab_context_t *ctx, int battery_pct)
     }
 
     if (ctx->home_files_label && files_loaded) {
-        if (!ctx->sd_card_present && !internal_sd_present) {
-            lv_label_set_text(ctx->home_files_label, "wpa-sec: " LV_SYMBOL_CLOSE);
-            lv_obj_set_style_text_color(ctx->home_files_label, COLOR_MATERIAL_RED, 0);
-            if (ctx->home_files_detail_label) {
-                lv_label_set_text(ctx->home_files_detail_label, "vendors: " LV_SYMBOL_CLOSE);
-                lv_obj_set_style_text_color(ctx->home_files_detail_label, COLOR_MATERIAL_RED, 0);
-            }
-            if (ctx->home_files_white_label) {
-                lv_label_set_text(ctx->home_files_white_label, "white: " LV_SYMBOL_CLOSE);
-                lv_obj_set_style_text_color(ctx->home_files_white_label, COLOR_MATERIAL_RED, 0);
-            }
-            if (ctx->home_files_wigle_label) {
-                lv_label_set_text(ctx->home_files_wigle_label, "wigle: " LV_SYMBOL_CLOSE);
-                lv_obj_set_style_text_color(ctx->home_files_wigle_label, COLOR_MATERIAL_RED, 0);
-            }
-            if (ctx->home_files_wdgwars_label) {
-                lv_label_set_text(ctx->home_files_wdgwars_label, "wdgwars: " LV_SYMBOL_CLOSE);
-                lv_obj_set_style_text_color(ctx->home_files_wdgwars_label, COLOR_MATERIAL_RED, 0);
-            }
-            if (ctx->home_files_home_label) {
-                lv_label_set_text(ctx->home_files_home_label, "home: " LV_SYMBOL_CLOSE);
-                lv_obj_set_style_text_color(ctx->home_files_home_label, COLOR_MATERIAL_RED, 0);
-            }
+        if (!ctx->sd_card_present) {
+            // The active tab's device has no SD card, so none of the lab data
+            // files can live on it (e.g. a Monster/Waveshare C5 with no card, or
+            // the internal tab with no card inserted). Say that honestly with a
+            // single "No SD card" line instead of six red "missing" marks that
+            // read like an error the user could fix by copying files across
+            // (issues #13/#17). The per-file state below only makes sense once a
+            // card is actually present.
+            lv_label_set_text(ctx->home_files_label, "No SD card");
+            lv_obj_set_style_text_color(ctx->home_files_label, COLOR_MATERIAL_AMBER, 0);
+            if (ctx->home_files_detail_label)  lv_label_set_text(ctx->home_files_detail_label, "");
+            if (ctx->home_files_white_label)   lv_label_set_text(ctx->home_files_white_label, "");
+            if (ctx->home_files_wigle_label)   lv_label_set_text(ctx->home_files_wigle_label, "");
+            if (ctx->home_files_wdgwars_label) lv_label_set_text(ctx->home_files_wdgwars_label, "");
+            if (ctx->home_files_home_label)    lv_label_set_text(ctx->home_files_home_label, "");
         } else {
             lv_label_set_text(ctx->home_files_label,
                               ctx->home_wpasec_present ? "wpa-sec: " LV_SYMBOL_OK : "wpa-sec: " LV_SYMBOL_CLOSE);
