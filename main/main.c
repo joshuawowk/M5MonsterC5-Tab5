@@ -55414,7 +55414,18 @@ static void show_scan_time_popup(void)
     tab_context_t *vendor_ctx = get_ctx_for_tab(scan_setup_vendor_tab);
     if (scan_setup_vendor_target_valid && vendor_ctx && !vendor_ctx->home_vendors_present) {
         lv_obj_t *hint = lv_label_create(scan_time_popup_obj);
-        lv_label_set_text(hint, "JanOS SD: /sdcard/lab/oui_wifi.bin missing");
+        // Explain WHY vendor resolution is unavailable without implying the user
+        // just forgot a file. Vendor names are resolved on the Monster from an
+        // OUI database on its SD card; if the Monster has no SD card at all
+        // (e.g. a Waveshare C5), the file can never be there, so say that plainly
+        // rather than "oui_wifi.bin missing" (issues #13/#17).
+        if (!vendor_ctx->sd_card_present) {
+            lv_label_set_text(hint,
+                "Vendor names need an SD card on the Monster (none detected)");
+        } else {
+            lv_label_set_text(hint,
+                "Vendor DB missing on the Monster SD: /sdcard/lab/oui_wifi.bin");
+        }
         lv_obj_set_width(hint, lv_pct(100));
         lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
         lv_obj_set_style_text_color(hint, ui_text_color(), 0);
