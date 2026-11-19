@@ -52012,8 +52012,16 @@ static bool build_wifi_connect_command(char *out, size_t out_sz, const char *ssi
 
 static bool wifi_network_security_is_open(const char *security)
 {
+    // Fail CLOSED: when a network's security is unknown, empty or unrecognized,
+    // treat it as secured (prompt for a password) rather than claiming it is
+    // open. Falsely reporting a secured network as open (issue #3) misleads the
+    // user and makes an open-connect attempt fail; the reverse is merely an
+    // extra password prompt, and a genuinely open network can still be joined by
+    // leaving the password blank. JanOS reports open networks as "Open"; OWE
+    // ("Enhanced/Opportunistic Open") associates without a passphrase, so from
+    // the connect UI's point of view it is open too.
     if (!security || security[0] == '\0') {
-        return true;
+        return false;
     }
     char upper[32];
     size_t i = 0;
@@ -52022,14 +52030,10 @@ static bool wifi_network_security_is_open(const char *security)
     }
     upper[i] = '\0';
 
-    if (strstr(upper, "OPEN") || strstr(upper, "UNKNOWN") || strstr(upper, "OWE")) {
+    if (strstr(upper, "OPEN") || strstr(upper, "OWE")) {
         return true;
     }
-    if (strstr(upper, "WPA") || strstr(upper, "WEP") ||
-        strstr(upper, "SAE") || strstr(upper, "PSK")) {
-        return false;
-    }
-    return true;
+    return false;
 }
 
 static void beacon_spam_trim_whitespace(char *text)
