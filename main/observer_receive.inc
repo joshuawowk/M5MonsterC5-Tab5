@@ -72,6 +72,10 @@ static int observer_receive_ap(tab_context_t *ctx, const char *line, bool vendor
     if (found >= 0) {
         observer_network_t *net = &ctx->observer_networks[found];
         if (vendor) snprintf(net->vendor, sizeof(net->vendor), "%s", parsed->vendor);
+        // Fall back to the Tab5's own OUI DB when the Monster didn't resolve it
+        // (e.g. a C5 with no SD card) -- issues #13/#17.
+        if (net->vendor[0] == '\0')
+            observer_tab5_vendor_lookup(net->bssid, net->vendor, sizeof(net->vendor));
         if (parsed->extended.present) {
             net->extended = parsed->extended;
             net->extended_received_ms = observer_clock_ms();
@@ -107,6 +111,10 @@ static bool observer_receive_client(observer_network_t *net, const char *line, b
             net->client_age_ms[i] = x->age_ms;
             net->client_received_ms[i] = observer_clock_ms();
         }
+        // Resolve the station vendor from the Tab5's own OUI DB when the Monster
+        // couldn't (no SD card on the C5) -- issues #13/#17.
+        if (net->client_vendors[i][0] == '\0')
+            observer_tab5_vendor_lookup(mac, net->client_vendors[i], sizeof(net->client_vendors[i]));
         break;
     }
     free(x);

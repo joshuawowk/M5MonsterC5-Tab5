@@ -34,6 +34,7 @@
 #include "observer_options.h"
 #include "observer_options_ui.h"
 #include "janos_sniffer_session.h"
+#include "oui_vendor.h"  // Tab5-side OUI->vendor lookup from /sdcard/lab/oui_wifi.bin
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -123,7 +124,7 @@ extern void pthread_internal_local_storage_destructor_callback(TaskHandle_t hand
 #endif
 
 
-#define JANOS_TAB_VERSION "1.5.7"
+#define JANOS_TAB_VERSION "1.5.8"
 // Minimum companion JanOS this app is built against. A board on this version or
 // newer is compatible; older raises the version-mismatch warning. Compared with
 // janos_version_is_compatible() (semver), not an exact string match, so a board
@@ -1944,6 +1945,54 @@ static void style_popup_card(lv_obj_t *popup, lv_coord_t radius, lv_color_t acce
     lv_obj_set_style_shadow_width(popup, dark_mode_enabled ? 20 : 10, 0);
     lv_obj_set_style_shadow_color(popup, lv_color_hex(0x000000), 0);
     lv_obj_set_style_shadow_opa(popup, dark_mode_enabled ? LV_OPA_30 : LV_OPA_20, 0);
+
+    // Cap every modal card to what the tab container actually offers so a card
+    // hand-tuned for the 1280 px portrait height can't run off both edges in a
+    // 90/270 landscape (~590 px of container) and hide its close button under
+    // the tab bar or its action row below the screen (issue #2 "menus cut off
+    // top and bottom"). A display-relative PIXEL budget is deliberate over a
+    // percentage: max_height only shrinks a card TALLER than the budget, so a
+    // short card in a content-sized parent is untouched (a 92%-of-parent cap
+    // would wrongly clip it). These cards are lv_obj_center'd, so the clamp
+    // keeps them centred; scrollable cards reach the rest of their content and
+    // scroll flags are left exactly as each popup set them.
+    lv_coord_t popup_max_h = (lv_coord_t)lv_disp_get_ver_res(NULL) - UI_TOP_OFFSET - 40;
+    if (popup_max_h > 0) {
+        lv_obj_set_style_max_height(popup, popup_max_h, 0);
+    }
+}
+
+// lv_theme_t is opaque in the public lvgl.h; pull in its full definition so we can
+// derive a child theme from the active one below (issue #16 theme hook).
+#include "src/themes/lv_theme_private.h"
+
+// Flatten LVGL button shadows app-wide (issue #16). The active LVGL theme is the
+// default LIGHT theme (CONFIG_LV_CONF_SKIP=y, so LVGL uses Kconfig where
+// LV_THEME_DEFAULT_DARK is unset; the app paints its own dark colours on top).
+// That theme gives every lv_button a grey 50% shadow offset 4px down
+// (lv_theme_default.c:284-288), which smears the rounded corners on the app's
+// dark surfaces. Rather than zero it on each of ~289 buttons, extend the active
+// theme with an apply-callback that clears the shadow on every button once, as a
+// child theme whose parent is the default (so default styling runs first).
+static lv_style_t s_btn_flat_style;
+static lv_theme_t s_app_theme;
+static void app_theme_apply_cb(lv_theme_t *th, lv_obj_t *obj)
+{
+    (void)th;
+    if (lv_obj_check_type(obj, &lv_button_class)) {
+        lv_obj_add_style(obj, &s_btn_flat_style, 0);
+    }
+}
+static void install_flat_button_theme(lv_display_t *disp)
+{
+    lv_theme_t *base = disp ? lv_display_get_theme(disp) : NULL;
+    if (!base) return;
+    lv_style_init(&s_btn_flat_style);
+    lv_style_set_shadow_width(&s_btn_flat_style, 0);
+    s_app_theme = *base;                      // inherit fonts/colours
+    lv_theme_set_parent(&s_app_theme, base);  // default styles apply first,
+    lv_theme_set_apply_cb(&s_app_theme, app_theme_apply_cb);  // then flatten buttons
+    lv_display_set_theme(disp, &s_app_theme);
 }
 
 // True when the screen is wide enough to run in one line what portrait has to
@@ -2667,7 +2716,27 @@ static void prepare_observer_attack_override(tab_context_t *ctx, int observer_id
     snprintf(ctx->observer_attack_network.ssid, sizeof(ctx->observer_attack_network.ssid), "%s", net->ssid);
     snprintf(ctx->observer_attack_network.bssid, sizeof(ctx->observer_attack_network.bssid), "%s", net->bssid);
     snprintf(ctx->observer_attack_network.band, sizeof(ctx->observer_attack_network.band), "%s", net->band);
-    snprintf(ctx->observer_attack_network.security, sizeof(ctx->observer_attack_network.security), "%s", net->security);
+    // Prefer the extended security ("WPA2 Personal", "Open", "OWE", ...) when the
+    // Observer has it, exactly as the Observer list itself does
+    // (observer_view.inc: `ext ? x->security : net->security`). The basic
+    // net->security can be empty for an AP first seen by the sniffer, and an
+    // empty string now classifies as secured (#3 fail-closed); passing the
+    // richer field through keeps a genuinely open target joinable with a blank
+    // password while still reporting WPA2 as secured on the Nmap/ARP screen.
+    // extended.security defaults to the literal "Unknown" (observer_extended.h)
+    // when RSN/WPA couldn't be classified; that is non-empty but LESS useful than
+    // a basic "Open"/"WPA2" from the scan line, and (being unrecognized) would
+    // fail closed and block a genuinely open target. So only prefer extended when
+    // it actually classified the network.
+    const char *attack_security =
+        (net->extended.present && net->extended.security[0] &&
+         strcmp(net->extended.security, "Unknown") != 0) ? net->extended.security
+                                                         : net->security;
+    // extended.security is a wider buffer than this field; the security tokens we
+    // care about ("Open", "OWE", "WPA2 Personal", ...) are short, so bound the
+    // copy to the destination width (avoids -Wformat-truncation on the 64->24 copy).
+    snprintf(ctx->observer_attack_network.security, sizeof(ctx->observer_attack_network.security),
+             "%.*s", (int)sizeof(ctx->observer_attack_network.security) - 1, attack_security);
 
     ctx->observer_attack_override_active = true;
     ctx->observer_attack_override_sel_index = 0;
@@ -4102,6 +4171,17 @@ static void home_read_remote_meta(tab_context_t *ctx)
         return;
     }
 
+    // The companion Monster may have no SD card of its own (e.g. a Waveshare C5
+    // that streams captures to the Tab5 over UART). When it doesn't, but the Tab5
+    // has its own SD card, read the lab-file status from the Tab5's card instead:
+    // that's where the user keeps these files and where the Tab5 now resolves
+    // vendor names from oui_wifi.bin itself (issues #13/#17). Avoids reporting
+    // everything missing when the files are actually sitting on the Tab5's card.
+    if (!ctx->sd_card_present && internal_sd_present) {
+        home_read_local_meta(ctx);
+        return;
+    }
+
     compromised_transport_lock_begin(tab, uart_port, &transport_lock_set);
 
     const char *hs_paths[] = { "/sdcard/lab/handshakes", "/lab/handshakes" };
@@ -4388,6 +4468,11 @@ static void update_home_dashboard_labels(tab_context_t *ctx, int battery_pct)
 
     if (ctx->home_files_label && files_loaded) {
         if (!ctx->sd_card_present && !internal_sd_present) {
+            // No usable card anywhere (neither the Monster's nor the Tab5's), so
+            // the lab files genuinely can't be present. When only the Monster
+            // lacks a card, home_read_remote_meta() has already read the file
+            // state from the Tab5's card, so the per-file branch below runs and
+            // shows what's actually missing on the Tab5's SD (issues #13/#17).
             lv_label_set_text(ctx->home_files_label, "wpa-sec: " LV_SYMBOL_CLOSE);
             lv_obj_set_style_text_color(ctx->home_files_label, COLOR_MATERIAL_RED, 0);
             if (ctx->home_files_detail_label) {
@@ -19815,6 +19900,27 @@ static void popup_client_row_click_cb(lv_event_t *e)
 }
 
 static bool add_client_mac(observer_network_t *net, const char *mac, const char *vendor);
+
+// Resolve a vendor name from the Tab5's OWN OUI database (/sdcard/lab/oui_wifi.bin),
+// used as a fallback when the Monster can't resolve it itself -- e.g. a Waveshare
+// C5 with no SD card of its own (issues #13/#17). The DB is lazily loaded from the
+// Tab5's SD on first use (rate-limited retries so a missing file isn't re-opened
+// every line) and kept in PSRAM. Fills `out` and returns true on a hit.
+static bool observer_tab5_vendor_lookup(const char *mac_str, char *out, size_t out_sz)
+{
+    if (out && out_sz) out[0] = '\0';
+    if (!observer_resolve_vendors || !mac_str || !mac_str[0]) return false;
+    if (!oui_vendor_is_loaded()) {
+        if (!internal_sd_present) return false;
+        static uint32_t last_try_ms = 0;
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        if (last_try_ms != 0 && (uint32_t)(now - last_try_ms) < 5000) return false;
+        last_try_ms = now;
+        if (!oui_vendor_load("/sdcard/lab/oui_wifi.bin")) return false;
+    }
+    return oui_vendor_lookup_str(mac_str, out, out_sz);
+}
+
 #include "observer_receive.inc"
 #include "observer_details.inc"
 
@@ -20713,8 +20819,7 @@ static bool add_client_mac(observer_network_t *net, const char *mac, const char 
     // Find empty slot
     for (int i = 0; i < MAX_CLIENTS_PER_NETWORK; i++) {
         if (net->clients[i][0] == '\0') {
-            strncpy(net->clients[i], mac, sizeof(net->clients[i]) - 1);
-            net->clients[i][sizeof(net->clients[i]) - 1] = '\0';
+            snprintf(net->clients[i], sizeof(net->clients[i]), "%s", mac);
             snprintf(net->client_vendors[i], sizeof(net->client_vendors[i]),
                      "%s", (vendor && vendor[0]) ? vendor : "");
             net->client_count++;
@@ -21194,6 +21299,7 @@ static void observer_add_network_tile(tab_context_t *ctx, int i, bool expanded)
     lv_obj_set_style_bg_color(ui->client_toggle, lv_color_hex(0x1F4A48),
                               LV_STATE_PRESSED);
     lv_obj_set_style_radius(ui->client_toggle, 8, 0);
+    lv_obj_set_style_shadow_width(ui->client_toggle, 0, 0);  // light-theme btn shadow smears corners (#16)
     lv_obj_clear_flag(ui->client_toggle, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(ui->client_toggle, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_flag(ui->client_toggle, LV_OBJ_FLAG_HIDDEN);
@@ -22092,6 +22198,21 @@ static void observer_start_task(void *arg)
     ctx->observer_network_count = 0;
     memset(ctx->observer_networks, 0, sizeof(observer_network_t) * MAX_OBSERVER_NETWORKS);
 
+    // Drop the Monster's preserved sniffer table before this fresh observation.
+    // JanOS keeps AP/client results (and their last_seen timestamps) across
+    // start/stop cycles by design ("results preserved between sessions"); the C5
+    // can stay powered for many hours, so without clearing, the Observer
+    // repopulates from an earlier session and shows stations last seen tens of
+    // thousands of seconds ago as if they were current -- the "Seen 59000s ago"
+    // report in issue #14. clear_sniffer_results is an existing JanOS console
+    // command; this fresh-Start path is the only place it runs (the per-AP
+    // client popup and no-scan refresh intentionally keep what's there). The
+    // short delay lets the ack arrive so the flush below discards it.
+    char clear_cmd[] = "clear_sniffer_results\r\n";
+    transport_write_bytes_tab(task_tab, uart_port, clear_cmd, strlen(clear_cmd));
+    ESP_LOGI(TAG, "[%s] Sent: clear_sniffer_results", uart_name);
+    vTaskDelay(pdMS_TO_TICKS(100));
+
     // Flush UART buffer
     observer_flush_transport_input(task_tab, uart_port);
 
@@ -22954,6 +23075,11 @@ static void show_observer_page(void)
     lv_obj_set_style_bg_color(ctx->observer_stop_btn, lv_color_lighten(COLOR_MATERIAL_RED, 30), LV_STATE_PRESSED);
     lv_obj_set_style_bg_color(ctx->observer_stop_btn, lv_color_hex(0x444444), LV_STATE_DISABLED);
     lv_obj_set_style_radius(ctx->observer_stop_btn, 8, 0);
+    // The default (light) LVGL theme gives every lv_btn a grey, 50%-opacity
+    // shadow offset 4px down, which smears the rounded corners on a dark row
+    // (issue #16). These header buttons only override bg+radius, so zero it
+    // explicitly like the themed observer buttons (observer_style_button) do.
+    lv_obj_set_style_shadow_width(ctx->observer_stop_btn, 0, 0);
     lv_obj_add_event_cb(ctx->observer_stop_btn, observer_stop_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_state(ctx->observer_stop_btn, LV_STATE_DISABLED);  // Initially disabled
 
@@ -22971,6 +23097,7 @@ static void show_observer_page(void)
     lv_obj_set_style_bg_color(ctx->observer_start_btn, lv_color_lighten(COLOR_MATERIAL_GREEN, 30), LV_STATE_PRESSED);
     lv_obj_set_style_bg_color(ctx->observer_start_btn, lv_color_hex(0x444444), LV_STATE_DISABLED);
     lv_obj_set_style_radius(ctx->observer_start_btn, 8, 0);
+    lv_obj_set_style_shadow_width(ctx->observer_start_btn, 0, 0);  // see Stop button (#16)
     lv_obj_add_event_cb(ctx->observer_start_btn, observer_start_btn_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *start_label = lv_label_create(ctx->observer_start_btn);
@@ -22986,6 +23113,7 @@ static void show_observer_page(void)
     lv_obj_set_style_bg_color(ctx->observer_export_btn, COLOR_MATERIAL_CYAN, 0);
     lv_obj_set_style_bg_color(ctx->observer_export_btn, lv_color_lighten(COLOR_MATERIAL_CYAN, 30), LV_STATE_PRESSED);
     lv_obj_set_style_radius(ctx->observer_export_btn, 8, 0);
+    lv_obj_set_style_shadow_width(ctx->observer_export_btn, 0, 0);  // see Stop button (#16)
     lv_obj_add_event_cb(ctx->observer_export_btn, observer_export_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(ctx->observer_export_btn, LV_OBJ_FLAG_HIDDEN);  // Hidden until results
 
@@ -23000,6 +23128,7 @@ static void show_observer_page(void)
     lv_obj_set_style_bg_color(options, lv_color_hex(0x1A3333), 0);
     lv_obj_set_style_bg_color(options, lv_color_hex(0x2A4444), LV_STATE_PRESSED);
     lv_obj_set_style_radius(options, 8, 0);
+    lv_obj_set_style_shadow_width(options, 0, 0);  // see Stop button (#16)
     lv_obj_t *options_label = lv_label_create(options);
     lv_label_set_text(options_label, "Options");
     lv_obj_set_style_text_color(options_label, lv_color_hex(0xFFFFFF), 0);
@@ -52012,8 +52141,16 @@ static bool build_wifi_connect_command(char *out, size_t out_sz, const char *ssi
 
 static bool wifi_network_security_is_open(const char *security)
 {
+    // Fail CLOSED: when a network's security is unknown, empty or unrecognized,
+    // treat it as secured (prompt for a password) rather than claiming it is
+    // open. Falsely reporting a secured network as open (issue #3) misleads the
+    // user and makes an open-connect attempt fail; the reverse is merely an
+    // extra password prompt, and a genuinely open network can still be joined by
+    // leaving the password blank. JanOS reports open networks as "Open"; OWE
+    // ("Enhanced/Opportunistic Open") associates without a passphrase, so from
+    // the connect UI's point of view it is open too.
     if (!security || security[0] == '\0') {
-        return true;
+        return false;
     }
     char upper[32];
     size_t i = 0;
@@ -52022,14 +52159,10 @@ static bool wifi_network_security_is_open(const char *security)
     }
     upper[i] = '\0';
 
-    if (strstr(upper, "OPEN") || strstr(upper, "UNKNOWN") || strstr(upper, "OWE")) {
+    if (strstr(upper, "OPEN") || strstr(upper, "OWE")) {
         return true;
     }
-    if (strstr(upper, "WPA") || strstr(upper, "WEP") ||
-        strstr(upper, "SAE") || strstr(upper, "PSK")) {
-        return false;
-    }
-    return true;
+    return false;
 }
 
 static void beacon_spam_trim_whitespace(char *text)
@@ -53695,7 +53828,18 @@ static void a164_nav_add_focusables(lv_obj_t *cont, lv_group_t *g)
     for (uint32_t i = 0; i < n; i++) {
         lv_obj_t *child = lv_obj_get_child(cont, i);
         if (lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN)) continue;
-        if (lv_obj_has_flag(child, LV_OBJ_FLAG_CLICKABLE)) {
+        // Only add widgets that actually DO something when activated. Base
+        // lv_obj containers are CLICKABLE + CLICK_FOCUSABLE by default (e.g. the
+        // home tile grid and its wrapper), so LVGL's pointer click-focus would
+        // focus them on a touch and paint the whole container with the keypad
+        // focus outline (issue #15) -- while Enter had nothing to activate.
+        // Require either a real widget type (button, switch, dropdown, textarea,
+        // ...) or at least one event callback: this keeps every genuinely
+        // interactive element (the tiles are lv_btn with a CLICKED cb) and skips
+        // inert containers. Children are still recursed into below regardless.
+        if (lv_obj_has_flag(child, LV_OBJ_FLAG_CLICKABLE) &&
+            (lv_obj_get_class(child) != &lv_obj_class ||
+             lv_obj_get_event_count(child) > 0)) {
             lv_group_add_obj(g, child);
             if (!lv_obj_has_flag(child, LV_OBJ_FLAG_USER_1)) {
                 lv_obj_add_style(child, &s_a164_focus_style, LV_STATE_FOCUSED);
@@ -55414,7 +55558,13 @@ static void show_scan_time_popup(void)
     tab_context_t *vendor_ctx = get_ctx_for_tab(scan_setup_vendor_tab);
     if (scan_setup_vendor_target_valid && vendor_ctx && !vendor_ctx->home_vendors_present) {
         lv_obj_t *hint = lv_label_create(scan_time_popup_obj);
-        lv_label_set_text(hint, "JanOS SD: /sdcard/lab/oui_wifi.bin missing");
+        // Vendor names resolve from an OUI database. The Tab5 now resolves them
+        // itself when the Monster can't, reading oui_wifi.bin from its OWN SD
+        // card, so point the user to the file + where to get it rather than
+        // blaming a card that isn't there (issues #13/#17). get it from the
+        // projectZero release (firmware/oui_wifi.bin).
+        lv_label_set_text(hint,
+            "Add oui_wifi.bin to /sdcard/lab/ on the Tab5 SD (projectZero release)");
         lv_obj_set_width(hint, lv_pct(100));
         lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
         lv_obj_set_style_text_color(hint, ui_text_color(), 0);
@@ -74021,6 +74171,10 @@ void app_main(void)
     }
     // LVGL exists now: USB callbacks may schedule GUI redetects from here on.
     lvgl_ready = true;
+
+    // Extend the (light) default theme so no button carries its grey drop shadow
+    // (issue #16). Must run before any screen/widget is built below.
+    install_flat_button_theme(disp);
 
     // Apply the saved orientation before a single widget exists, so everything
     // below is built against the final resolution. The rotation itself is done

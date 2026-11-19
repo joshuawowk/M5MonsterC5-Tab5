@@ -1,6 +1,7 @@
 file(TO_CMAKE_PATH "$ENV{IDF_PATH}" HS_CRACK_IDF_PATH)
 idf_component_register(SRCS
                     "main.c"
+                    "oui_vendor.c"
                     "sentinel_app_info.c"
                     "sniffer_clients_model.c"
                     "tile_order.c"
