@@ -2689,9 +2689,15 @@ static void prepare_observer_attack_override(tab_context_t *ctx, int observer_id
     // empty string now classifies as secured (#3 fail-closed); passing the
     // richer field through keeps a genuinely open target joinable with a blank
     // password while still reporting WPA2 as secured on the Nmap/ARP screen.
+    // extended.security defaults to the literal "Unknown" (observer_extended.h)
+    // when RSN/WPA couldn't be classified; that is non-empty but LESS useful than
+    // a basic "Open"/"WPA2" from the scan line, and (being unrecognized) would
+    // fail closed and block a genuinely open target. So only prefer extended when
+    // it actually classified the network.
     const char *attack_security =
-        (net->extended.present && net->extended.security[0]) ? net->extended.security
-                                                             : net->security;
+        (net->extended.present && net->extended.security[0] &&
+         strcmp(net->extended.security, "Unknown") != 0) ? net->extended.security
+                                                         : net->security;
     // extended.security is a wider buffer than this field; the security tokens we
     // care about ("Open", "OWE", "WPA2 Personal", ...) are short, so bound the
     // copy to the destination width (avoids -Wformat-truncation on the 64->24 copy).
@@ -4353,9 +4359,15 @@ static void update_home_dashboard_labels(tab_context_t *ctx, int battery_pct)
     }
 
     if (ctx->home_handshakes_label) {
-        if (!ctx->sd_card_present && !internal_sd_present) {
-            lv_label_set_text(ctx->home_handshakes_label, "NO SD");
-            lv_obj_set_style_text_color(ctx->home_handshakes_label, COLOR_MATERIAL_RED, 0);
+        if (!ctx->sd_card_present) {
+            // Gate on the active device's own card (like the FILES panel) so the
+            // handshake count and the FILES panel stay consistent: a USB/Grove/MBus
+            // tab points at the Monster's card, the internal tab at the Tab5's. The
+            // pcap count here is read from that same (absent) card, so show the
+            // no-SD state instead of a misleading "0 pcap" (issues #13/#17).
+            lv_label_set_text(ctx->home_handshakes_label,
+                              tab_is_internal(tab_id_for_ctx(ctx)) ? "NO SD" : "Monster: no SD");
+            lv_obj_set_style_text_color(ctx->home_handshakes_label, COLOR_MATERIAL_AMBER, 0);
         } else {
             char hs_buf[24];
             snprintf(hs_buf, sizeof(hs_buf), "%d pcap", ctx->home_handshake_count);
