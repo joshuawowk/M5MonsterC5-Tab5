@@ -1962,6 +1962,10 @@ static void style_popup_card(lv_obj_t *popup, lv_coord_t radius, lv_color_t acce
     }
 }
 
+// lv_theme_t is opaque in the public lvgl.h; pull in its full definition so we can
+// derive a child theme from the active one below (issue #16 theme hook).
+#include "src/themes/lv_theme_private.h"
+
 // Flatten LVGL button shadows app-wide (issue #16). The active LVGL theme is the
 // default LIGHT theme (CONFIG_LV_CONF_SKIP=y, so LVGL uses Kconfig where
 // LV_THEME_DEFAULT_DARK is unset; the app paints its own dark colours on top).
@@ -20815,8 +20819,7 @@ static bool add_client_mac(observer_network_t *net, const char *mac, const char 
     // Find empty slot
     for (int i = 0; i < MAX_CLIENTS_PER_NETWORK; i++) {
         if (net->clients[i][0] == '\0') {
-            strncpy(net->clients[i], mac, sizeof(net->clients[i]) - 1);
-            net->clients[i][sizeof(net->clients[i]) - 1] = '\0';
+            snprintf(net->clients[i], sizeof(net->clients[i]), "%s", mac);
             snprintf(net->client_vendors[i], sizeof(net->client_vendors[i]),
                      "%s", (vendor && vendor[0]) ? vendor : "");
             net->client_count++;
