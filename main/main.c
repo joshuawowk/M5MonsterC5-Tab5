@@ -123,7 +123,7 @@ extern void pthread_internal_local_storage_destructor_callback(TaskHandle_t hand
 #endif
 
 
-#define JANOS_TAB_VERSION "1.5.6"
+#define JANOS_TAB_VERSION "1.5.7"
 // Minimum companion JanOS this app is built against. A board on this version or
 // newer is compatible; older raises the version-mismatch warning. Compared with
 // janos_version_is_compatible() (semver), not an exact string match, so a board
