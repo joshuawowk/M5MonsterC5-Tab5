@@ -1945,18 +1945,20 @@ static void style_popup_card(lv_obj_t *popup, lv_coord_t radius, lv_color_t acce
     lv_obj_set_style_shadow_color(popup, lv_color_hex(0x000000), 0);
     lv_obj_set_style_shadow_opa(popup, dark_mode_enabled ? LV_OPA_30 : LV_OPA_20, 0);
 
-    // Cap every modal card to a fraction of its parent so a card hand-tuned for
-    // the 1280 px portrait height can't run off both edges in a 90/270 landscape
-    // and hide its close button under the tab bar or its action row below the
-    // screen (issue #2 "menus cut off top and bottom"). A percentage resolves
-    // against each card's actual parent (the tab container at ~590 px, or the
-    // full-screen top layer), so container-parented and layer-top popups both
-    // get a correct margin without over-shrinking either. max_height only ever
-    // SHRINKS an oversize card; one that already fits is untouched, and because
-    // these cards are lv_obj_center'd the clamp keeps them centred. Scrollable
-    // cards then reach the rest of their content; scroll flags are left exactly
-    // as each popup set them.
-    lv_obj_set_style_max_height(popup, lv_pct(92), 0);
+    // Cap every modal card to what the tab container actually offers so a card
+    // hand-tuned for the 1280 px portrait height can't run off both edges in a
+    // 90/270 landscape (~590 px of container) and hide its close button under
+    // the tab bar or its action row below the screen (issue #2 "menus cut off
+    // top and bottom"). A display-relative PIXEL budget is deliberate over a
+    // percentage: max_height only shrinks a card TALLER than the budget, so a
+    // short card in a content-sized parent is untouched (a 92%-of-parent cap
+    // would wrongly clip it). These cards are lv_obj_center'd, so the clamp
+    // keeps them centred; scrollable cards reach the rest of their content and
+    // scroll flags are left exactly as each popup set them.
+    lv_coord_t popup_max_h = (lv_coord_t)lv_disp_get_ver_res(NULL) - UI_TOP_OFFSET - 40;
+    if (popup_max_h > 0) {
+        lv_obj_set_style_max_height(popup, popup_max_h, 0);
+    }
 }
 
 // True when the screen is wide enough to run in one line what portrait has to
@@ -2680,7 +2682,21 @@ static void prepare_observer_attack_override(tab_context_t *ctx, int observer_id
     snprintf(ctx->observer_attack_network.ssid, sizeof(ctx->observer_attack_network.ssid), "%s", net->ssid);
     snprintf(ctx->observer_attack_network.bssid, sizeof(ctx->observer_attack_network.bssid), "%s", net->bssid);
     snprintf(ctx->observer_attack_network.band, sizeof(ctx->observer_attack_network.band), "%s", net->band);
-    snprintf(ctx->observer_attack_network.security, sizeof(ctx->observer_attack_network.security), "%s", net->security);
+    // Prefer the extended security ("WPA2 Personal", "Open", "OWE", ...) when the
+    // Observer has it, exactly as the Observer list itself does
+    // (observer_view.inc: `ext ? x->security : net->security`). The basic
+    // net->security can be empty for an AP first seen by the sniffer, and an
+    // empty string now classifies as secured (#3 fail-closed); passing the
+    // richer field through keeps a genuinely open target joinable with a blank
+    // password while still reporting WPA2 as secured on the Nmap/ARP screen.
+    const char *attack_security =
+        (net->extended.present && net->extended.security[0]) ? net->extended.security
+                                                             : net->security;
+    // extended.security is a wider buffer than this field; the security tokens we
+    // care about ("Open", "OWE", "WPA2 Personal", ...) are short, so bound the
+    // copy to the destination width (avoids -Wformat-truncation on the 64->24 copy).
+    snprintf(ctx->observer_attack_network.security, sizeof(ctx->observer_attack_network.security),
+             "%.*s", (int)sizeof(ctx->observer_attack_network.security) - 1, attack_security);
 
     ctx->observer_attack_override_active = true;
     ctx->observer_attack_override_sel_index = 0;
@@ -4401,14 +4417,17 @@ static void update_home_dashboard_labels(tab_context_t *ctx, int battery_pct)
 
     if (ctx->home_files_label && files_loaded) {
         if (!ctx->sd_card_present) {
-            // The active tab's device has no SD card, so none of the lab data
-            // files can live on it (e.g. a Monster/Waveshare C5 with no card, or
-            // the internal tab with no card inserted). Say that honestly with a
-            // single "No SD card" line instead of six red "missing" marks that
-            // read like an error the user could fix by copying files across
-            // (issues #13/#17). The per-file state below only makes sense once a
-            // card is actually present.
-            lv_label_set_text(ctx->home_files_label, "No SD card");
+            // The active tab's device has no SD card, so none of its lab data
+            // files can exist. Say that honestly with a single line instead of
+            // six red "missing" marks that read like an error the user could fix
+            // by copying files across (issues #13/#17). Name the device so this
+            // doesn't look like it contradicts the SD STORAGE tile, which always
+            // reports the Tab5's OWN internal card: a USB/Grove/MBus tab points
+            // at the Monster's (absent) card, the internal tab at the Tab5's.
+            // The per-file state below only makes sense once a card is present.
+            bool files_on_internal = tab_is_internal(tab_id_for_ctx(ctx));
+            lv_label_set_text(ctx->home_files_label,
+                              files_on_internal ? "No SD card" : "Monster: no SD");
             lv_obj_set_style_text_color(ctx->home_files_label, COLOR_MATERIAL_AMBER, 0);
             if (ctx->home_files_detail_label)  lv_label_set_text(ctx->home_files_detail_label, "");
             if (ctx->home_files_white_label)   lv_label_set_text(ctx->home_files_white_label, "");
