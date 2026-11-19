@@ -21199,6 +21199,7 @@ static void observer_add_network_tile(tab_context_t *ctx, int i, bool expanded)
     lv_obj_set_style_bg_color(ui->client_toggle, lv_color_hex(0x1F4A48),
                               LV_STATE_PRESSED);
     lv_obj_set_style_radius(ui->client_toggle, 8, 0);
+    lv_obj_set_style_shadow_width(ui->client_toggle, 0, 0);  // light-theme btn shadow smears corners (#16)
     lv_obj_clear_flag(ui->client_toggle, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(ui->client_toggle, LV_OBJ_FLAG_EVENT_BUBBLE);
     lv_obj_add_flag(ui->client_toggle, LV_OBJ_FLAG_HIDDEN);
@@ -22974,6 +22975,11 @@ static void show_observer_page(void)
     lv_obj_set_style_bg_color(ctx->observer_stop_btn, lv_color_lighten(COLOR_MATERIAL_RED, 30), LV_STATE_PRESSED);
     lv_obj_set_style_bg_color(ctx->observer_stop_btn, lv_color_hex(0x444444), LV_STATE_DISABLED);
     lv_obj_set_style_radius(ctx->observer_stop_btn, 8, 0);
+    // The default (light) LVGL theme gives every lv_btn a grey, 50%-opacity
+    // shadow offset 4px down, which smears the rounded corners on a dark row
+    // (issue #16). These header buttons only override bg+radius, so zero it
+    // explicitly like the themed observer buttons (observer_style_button) do.
+    lv_obj_set_style_shadow_width(ctx->observer_stop_btn, 0, 0);
     lv_obj_add_event_cb(ctx->observer_stop_btn, observer_stop_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_state(ctx->observer_stop_btn, LV_STATE_DISABLED);  // Initially disabled
 
@@ -22991,6 +22997,7 @@ static void show_observer_page(void)
     lv_obj_set_style_bg_color(ctx->observer_start_btn, lv_color_lighten(COLOR_MATERIAL_GREEN, 30), LV_STATE_PRESSED);
     lv_obj_set_style_bg_color(ctx->observer_start_btn, lv_color_hex(0x444444), LV_STATE_DISABLED);
     lv_obj_set_style_radius(ctx->observer_start_btn, 8, 0);
+    lv_obj_set_style_shadow_width(ctx->observer_start_btn, 0, 0);  // see Stop button (#16)
     lv_obj_add_event_cb(ctx->observer_start_btn, observer_start_btn_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *start_label = lv_label_create(ctx->observer_start_btn);
@@ -23006,6 +23013,7 @@ static void show_observer_page(void)
     lv_obj_set_style_bg_color(ctx->observer_export_btn, COLOR_MATERIAL_CYAN, 0);
     lv_obj_set_style_bg_color(ctx->observer_export_btn, lv_color_lighten(COLOR_MATERIAL_CYAN, 30), LV_STATE_PRESSED);
     lv_obj_set_style_radius(ctx->observer_export_btn, 8, 0);
+    lv_obj_set_style_shadow_width(ctx->observer_export_btn, 0, 0);  // see Stop button (#16)
     lv_obj_add_event_cb(ctx->observer_export_btn, observer_export_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(ctx->observer_export_btn, LV_OBJ_FLAG_HIDDEN);  // Hidden until results
 
@@ -23020,6 +23028,7 @@ static void show_observer_page(void)
     lv_obj_set_style_bg_color(options, lv_color_hex(0x1A3333), 0);
     lv_obj_set_style_bg_color(options, lv_color_hex(0x2A4444), LV_STATE_PRESSED);
     lv_obj_set_style_radius(options, 8, 0);
+    lv_obj_set_style_shadow_width(options, 0, 0);  // see Stop button (#16)
     lv_obj_t *options_label = lv_label_create(options);
     lv_label_set_text(options_label, "Options");
     lv_obj_set_style_text_color(options_label, lv_color_hex(0xFFFFFF), 0);
