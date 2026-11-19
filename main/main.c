@@ -34,6 +34,7 @@
 #include "observer_options.h"
 #include "observer_options_ui.h"
 #include "janos_sniffer_session.h"
+#include "oui_vendor.h"  // Tab5-side OUI->vendor lookup from /sdcard/lab/oui_wifi.bin
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
@@ -1959,6 +1960,35 @@ static void style_popup_card(lv_obj_t *popup, lv_coord_t radius, lv_color_t acce
     if (popup_max_h > 0) {
         lv_obj_set_style_max_height(popup, popup_max_h, 0);
     }
+}
+
+// Flatten LVGL button shadows app-wide (issue #16). The active LVGL theme is the
+// default LIGHT theme (CONFIG_LV_CONF_SKIP=y, so LVGL uses Kconfig where
+// LV_THEME_DEFAULT_DARK is unset; the app paints its own dark colours on top).
+// That theme gives every lv_button a grey 50% shadow offset 4px down
+// (lv_theme_default.c:284-288), which smears the rounded corners on the app's
+// dark surfaces. Rather than zero it on each of ~289 buttons, extend the active
+// theme with an apply-callback that clears the shadow on every button once, as a
+// child theme whose parent is the default (so default styling runs first).
+static lv_style_t s_btn_flat_style;
+static lv_theme_t s_app_theme;
+static void app_theme_apply_cb(lv_theme_t *th, lv_obj_t *obj)
+{
+    (void)th;
+    if (lv_obj_check_type(obj, &lv_button_class)) {
+        lv_obj_add_style(obj, &s_btn_flat_style, 0);
+    }
+}
+static void install_flat_button_theme(lv_display_t *disp)
+{
+    lv_theme_t *base = disp ? lv_display_get_theme(disp) : NULL;
+    if (!base) return;
+    lv_style_init(&s_btn_flat_style);
+    lv_style_set_shadow_width(&s_btn_flat_style, 0);
+    s_app_theme = *base;                      // inherit fonts/colours
+    lv_theme_set_parent(&s_app_theme, base);  // default styles apply first,
+    lv_theme_set_apply_cb(&s_app_theme, app_theme_apply_cb);  // then flatten buttons
+    lv_display_set_theme(disp, &s_app_theme);
 }
 
 // True when the screen is wide enough to run in one line what portrait has to
@@ -4137,6 +4167,17 @@ static void home_read_remote_meta(tab_context_t *ctx)
         return;
     }
 
+    // The companion Monster may have no SD card of its own (e.g. a Waveshare C5
+    // that streams captures to the Tab5 over UART). When it doesn't, but the Tab5
+    // has its own SD card, read the lab-file status from the Tab5's card instead:
+    // that's where the user keeps these files and where the Tab5 now resolves
+    // vendor names from oui_wifi.bin itself (issues #13/#17). Avoids reporting
+    // everything missing when the files are actually sitting on the Tab5's card.
+    if (!ctx->sd_card_present && internal_sd_present) {
+        home_read_local_meta(ctx);
+        return;
+    }
+
     compromised_transport_lock_begin(tab, uart_port, &transport_lock_set);
 
     const char *hs_paths[] = { "/sdcard/lab/handshakes", "/lab/handshakes" };
@@ -4359,15 +4400,9 @@ static void update_home_dashboard_labels(tab_context_t *ctx, int battery_pct)
     }
 
     if (ctx->home_handshakes_label) {
-        if (!ctx->sd_card_present) {
-            // Gate on the active device's own card (like the FILES panel) so the
-            // handshake count and the FILES panel stay consistent: a USB/Grove/MBus
-            // tab points at the Monster's card, the internal tab at the Tab5's. The
-            // pcap count here is read from that same (absent) card, so show the
-            // no-SD state instead of a misleading "0 pcap" (issues #13/#17).
-            lv_label_set_text(ctx->home_handshakes_label,
-                              tab_is_internal(tab_id_for_ctx(ctx)) ? "NO SD" : "Monster: no SD");
-            lv_obj_set_style_text_color(ctx->home_handshakes_label, COLOR_MATERIAL_AMBER, 0);
+        if (!ctx->sd_card_present && !internal_sd_present) {
+            lv_label_set_text(ctx->home_handshakes_label, "NO SD");
+            lv_obj_set_style_text_color(ctx->home_handshakes_label, COLOR_MATERIAL_RED, 0);
         } else {
             char hs_buf[24];
             snprintf(hs_buf, sizeof(hs_buf), "%d pcap", ctx->home_handshake_count);
@@ -4428,24 +4463,34 @@ static void update_home_dashboard_labels(tab_context_t *ctx, int battery_pct)
     }
 
     if (ctx->home_files_label && files_loaded) {
-        if (!ctx->sd_card_present) {
-            // The active tab's device has no SD card, so none of its lab data
-            // files can exist. Say that honestly with a single line instead of
-            // six red "missing" marks that read like an error the user could fix
-            // by copying files across (issues #13/#17). Name the device so this
-            // doesn't look like it contradicts the SD STORAGE tile, which always
-            // reports the Tab5's OWN internal card: a USB/Grove/MBus tab points
-            // at the Monster's (absent) card, the internal tab at the Tab5's.
-            // The per-file state below only makes sense once a card is present.
-            bool files_on_internal = tab_is_internal(tab_id_for_ctx(ctx));
-            lv_label_set_text(ctx->home_files_label,
-                              files_on_internal ? "No SD card" : "Monster: no SD");
-            lv_obj_set_style_text_color(ctx->home_files_label, COLOR_MATERIAL_AMBER, 0);
-            if (ctx->home_files_detail_label)  lv_label_set_text(ctx->home_files_detail_label, "");
-            if (ctx->home_files_white_label)   lv_label_set_text(ctx->home_files_white_label, "");
-            if (ctx->home_files_wigle_label)   lv_label_set_text(ctx->home_files_wigle_label, "");
-            if (ctx->home_files_wdgwars_label) lv_label_set_text(ctx->home_files_wdgwars_label, "");
-            if (ctx->home_files_home_label)    lv_label_set_text(ctx->home_files_home_label, "");
+        if (!ctx->sd_card_present && !internal_sd_present) {
+            // No usable card anywhere (neither the Monster's nor the Tab5's), so
+            // the lab files genuinely can't be present. When only the Monster
+            // lacks a card, home_read_remote_meta() has already read the file
+            // state from the Tab5's card, so the per-file branch below runs and
+            // shows what's actually missing on the Tab5's SD (issues #13/#17).
+            lv_label_set_text(ctx->home_files_label, "wpa-sec: " LV_SYMBOL_CLOSE);
+            lv_obj_set_style_text_color(ctx->home_files_label, COLOR_MATERIAL_RED, 0);
+            if (ctx->home_files_detail_label) {
+                lv_label_set_text(ctx->home_files_detail_label, "vendors: " LV_SYMBOL_CLOSE);
+                lv_obj_set_style_text_color(ctx->home_files_detail_label, COLOR_MATERIAL_RED, 0);
+            }
+            if (ctx->home_files_white_label) {
+                lv_label_set_text(ctx->home_files_white_label, "white: " LV_SYMBOL_CLOSE);
+                lv_obj_set_style_text_color(ctx->home_files_white_label, COLOR_MATERIAL_RED, 0);
+            }
+            if (ctx->home_files_wigle_label) {
+                lv_label_set_text(ctx->home_files_wigle_label, "wigle: " LV_SYMBOL_CLOSE);
+                lv_obj_set_style_text_color(ctx->home_files_wigle_label, COLOR_MATERIAL_RED, 0);
+            }
+            if (ctx->home_files_wdgwars_label) {
+                lv_label_set_text(ctx->home_files_wdgwars_label, "wdgwars: " LV_SYMBOL_CLOSE);
+                lv_obj_set_style_text_color(ctx->home_files_wdgwars_label, COLOR_MATERIAL_RED, 0);
+            }
+            if (ctx->home_files_home_label) {
+                lv_label_set_text(ctx->home_files_home_label, "home: " LV_SYMBOL_CLOSE);
+                lv_obj_set_style_text_color(ctx->home_files_home_label, COLOR_MATERIAL_RED, 0);
+            }
         } else {
             lv_label_set_text(ctx->home_files_label,
                               ctx->home_wpasec_present ? "wpa-sec: " LV_SYMBOL_OK : "wpa-sec: " LV_SYMBOL_CLOSE);
@@ -19851,6 +19896,27 @@ static void popup_client_row_click_cb(lv_event_t *e)
 }
 
 static bool add_client_mac(observer_network_t *net, const char *mac, const char *vendor);
+
+// Resolve a vendor name from the Tab5's OWN OUI database (/sdcard/lab/oui_wifi.bin),
+// used as a fallback when the Monster can't resolve it itself -- e.g. a Waveshare
+// C5 with no SD card of its own (issues #13/#17). The DB is lazily loaded from the
+// Tab5's SD on first use (rate-limited retries so a missing file isn't re-opened
+// every line) and kept in PSRAM. Fills `out` and returns true on a hit.
+static bool observer_tab5_vendor_lookup(const char *mac_str, char *out, size_t out_sz)
+{
+    if (out && out_sz) out[0] = '\0';
+    if (!observer_resolve_vendors || !mac_str || !mac_str[0]) return false;
+    if (!oui_vendor_is_loaded()) {
+        if (!internal_sd_present) return false;
+        static uint32_t last_try_ms = 0;
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        if (last_try_ms != 0 && (uint32_t)(now - last_try_ms) < 5000) return false;
+        last_try_ms = now;
+        if (!oui_vendor_load("/sdcard/lab/oui_wifi.bin")) return false;
+    }
+    return oui_vendor_lookup_str(mac_str, out, out_sz);
+}
+
 #include "observer_receive.inc"
 #include "observer_details.inc"
 
@@ -55489,18 +55555,13 @@ static void show_scan_time_popup(void)
     tab_context_t *vendor_ctx = get_ctx_for_tab(scan_setup_vendor_tab);
     if (scan_setup_vendor_target_valid && vendor_ctx && !vendor_ctx->home_vendors_present) {
         lv_obj_t *hint = lv_label_create(scan_time_popup_obj);
-        // Explain WHY vendor resolution is unavailable without implying the user
-        // just forgot a file. Vendor names are resolved on the Monster from an
-        // OUI database on its SD card; if the Monster has no SD card at all
-        // (e.g. a Waveshare C5), the file can never be there, so say that plainly
-        // rather than "oui_wifi.bin missing" (issues #13/#17).
-        if (!vendor_ctx->sd_card_present) {
-            lv_label_set_text(hint,
-                "Vendor names need an SD card on the Monster (none detected)");
-        } else {
-            lv_label_set_text(hint,
-                "Vendor DB missing on the Monster SD: /sdcard/lab/oui_wifi.bin");
-        }
+        // Vendor names resolve from an OUI database. The Tab5 now resolves them
+        // itself when the Monster can't, reading oui_wifi.bin from its OWN SD
+        // card, so point the user to the file + where to get it rather than
+        // blaming a card that isn't there (issues #13/#17). get it from the
+        // projectZero release (firmware/oui_wifi.bin).
+        lv_label_set_text(hint,
+            "Add oui_wifi.bin to /sdcard/lab/ on the Tab5 SD (projectZero release)");
         lv_obj_set_width(hint, lv_pct(100));
         lv_obj_set_style_text_font(hint, &lv_font_montserrat_12, 0);
         lv_obj_set_style_text_color(hint, ui_text_color(), 0);
@@ -74107,6 +74168,10 @@ void app_main(void)
     }
     // LVGL exists now: USB callbacks may schedule GUI redetects from here on.
     lvgl_ready = true;
+
+    // Extend the (light) default theme so no button carries its grey drop shadow
+    // (issue #16). Must run before any screen/widget is built below.
+    install_flat_button_theme(disp);
 
     // Apply the saved orientation before a single widget exists, so everything
     // below is built against the final resolution. The rotation itself is done
