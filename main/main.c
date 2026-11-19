@@ -22092,6 +22092,21 @@ static void observer_start_task(void *arg)
     ctx->observer_network_count = 0;
     memset(ctx->observer_networks, 0, sizeof(observer_network_t) * MAX_OBSERVER_NETWORKS);
 
+    // Drop the Monster's preserved sniffer table before this fresh observation.
+    // JanOS keeps AP/client results (and their last_seen timestamps) across
+    // start/stop cycles by design ("results preserved between sessions"); the C5
+    // can stay powered for many hours, so without clearing, the Observer
+    // repopulates from an earlier session and shows stations last seen tens of
+    // thousands of seconds ago as if they were current -- the "Seen 59000s ago"
+    // report in issue #14. clear_sniffer_results is an existing JanOS console
+    // command; this fresh-Start path is the only place it runs (the per-AP
+    // client popup and no-scan refresh intentionally keep what's there). The
+    // short delay lets the ack arrive so the flush below discards it.
+    char clear_cmd[] = "clear_sniffer_results\r\n";
+    transport_write_bytes_tab(task_tab, uart_port, clear_cmd, strlen(clear_cmd));
+    ESP_LOGI(TAG, "[%s] Sent: clear_sniffer_results", uart_name);
+    vTaskDelay(pdMS_TO_TICKS(100));
+
     // Flush UART buffer
     observer_flush_transport_input(task_tab, uart_port);
 
