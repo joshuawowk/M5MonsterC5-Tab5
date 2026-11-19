@@ -19153,7 +19153,9 @@ static void create_uart_tiles_in_container(lv_obj_t *container, tab_context_t *c
     // tile is created (NFC and WiFi Analyzer are added above) and AFTER
     // apply_tool_order, so no tile is left without a cell (which would stack it at
     // 0,0) and the saved order drives each tile's grid position. 5 columns x 3 rows
-    // holds up to 15 tiles; the current grid is 10-12.
+    // holds up to 15 tiles; the current grid is 10-12. A partial final row is
+    // centered across the 5 columns instead of left-packed, matching the portrait
+    // wrapping layout (whose main-axis align is already centered).
     if (ui_wide_layout()) {
         static const int32_t col5[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1),
                                        LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
@@ -19166,10 +19168,18 @@ static void create_uart_tiles_in_container(lv_obj_t *container, tab_context_t *c
         lv_obj_set_grid_dsc_array(tile_grid, col5, row3);
         lv_obj_set_layout(tile_grid, LV_LAYOUT_GRID);
         uint32_t tile_n = lv_obj_get_child_count(tile_grid);
-        for (uint32_t i = 0; i < tile_n && i < 15; i++) {
+        if (tile_n > 15) tile_n = 15;          // the grid holds 5 x 3 cells
+        uint32_t rows = (tile_n + 4) / 5;      // ceil(tile_n / 5)
+        uint32_t last_row = rows ? rows - 1 : 0;
+        uint32_t rem = tile_n % 5;             // tiles in the final row (0 => a full row)
+        uint32_t last_off = rem ? (5 - rem) / 2 : 0;   // shift to center the partial row
+        for (uint32_t i = 0; i < tile_n; i++) {
             lv_obj_t *t = lv_obj_get_child(tile_grid, i);
-            lv_obj_set_grid_cell(t, LV_GRID_ALIGN_STRETCH, (int32_t)(i % 5), 1,
-                                 LV_GRID_ALIGN_STRETCH, (int32_t)(i / 5), 1);
+            uint32_t row = i / 5;
+            uint32_t col = i % 5;
+            if (row == last_row && rem) col += last_off;
+            lv_obj_set_grid_cell(t, LV_GRID_ALIGN_STRETCH, (int32_t)col, 1,
+                                 LV_GRID_ALIGN_STRETCH, (int32_t)row, 1);
         }
     }
 
@@ -59967,6 +59977,9 @@ static void show_settings_page(void)
     lv_obj_set_style_bg_color(settings_page, ui_bg_color(), 0);
     lv_obj_set_style_border_width(settings_page, 0, 0);
     lv_obj_set_style_pad_all(settings_page, 16, 0);
+    // Extra bottom clearance so the final tile row can scroll clear of the page edge
+    // instead of sitting flush against it (and being clipped by a few pixels).
+    lv_obj_set_style_pad_bottom(settings_page, 40, 0);
     lv_obj_set_flex_flow(settings_page, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(settings_page, 16, 0);
     // The settings tile grid is content-sized rather than grown, so it is the
@@ -60013,8 +60026,10 @@ static void show_settings_page(void)
     lv_obj_set_flex_align(tiles, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(tiles, 20, 0);
     lv_obj_set_style_pad_row(tiles, 20, 0);
-    lv_obj_add_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(tiles, LV_DIR_VER);
+    // The settings page owns the vertical scroll; this content-sized tile grid must
+    // not also capture drag gestures, or the outer page cannot scroll the last tile
+    // row fully into view. lv_obj_create defaults to scrollable, so clear it here.
+    lv_obj_clear_flag(tiles, LV_OBJ_FLAG_SCROLLABLE);
 
     create_tile(tiles, LV_SYMBOL_SHUFFLE, "Tool\nOrder", COLOR_MATERIAL_TEAL, settings_tile_event_cb, "Tool Order");
 
