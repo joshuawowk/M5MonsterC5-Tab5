@@ -53695,7 +53695,18 @@ static void a164_nav_add_focusables(lv_obj_t *cont, lv_group_t *g)
     for (uint32_t i = 0; i < n; i++) {
         lv_obj_t *child = lv_obj_get_child(cont, i);
         if (lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN)) continue;
-        if (lv_obj_has_flag(child, LV_OBJ_FLAG_CLICKABLE)) {
+        // Only add widgets that actually DO something when activated. Base
+        // lv_obj containers are CLICKABLE + CLICK_FOCUSABLE by default (e.g. the
+        // home tile grid and its wrapper), so LVGL's pointer click-focus would
+        // focus them on a touch and paint the whole container with the keypad
+        // focus outline (issue #15) -- while Enter had nothing to activate.
+        // Require either a real widget type (button, switch, dropdown, textarea,
+        // ...) or at least one event callback: this keeps every genuinely
+        // interactive element (the tiles are lv_btn with a CLICKED cb) and skips
+        // inert containers. Children are still recursed into below regardless.
+        if (lv_obj_has_flag(child, LV_OBJ_FLAG_CLICKABLE) &&
+            (lv_obj_get_class(child) != &lv_obj_class ||
+             lv_obj_get_event_count(child) > 0)) {
             lv_group_add_obj(g, child);
             if (!lv_obj_has_flag(child, LV_OBJ_FLAG_USER_1)) {
                 lv_obj_add_style(child, &s_a164_focus_style, LV_STATE_FOCUSED);
