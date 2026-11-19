@@ -1651,6 +1651,30 @@ esp_err_t bsp_display_new_with_handles_to_st7123(const bsp_display_config_t* con
         dpi_config.video_timing.vsync_pulse_width = 20;
         dpi_config.video_timing.vsync_back_porch  = 24;
         dpi_config.video_timing.vsync_front_porch = 200;
+
+        /* ESP-IDF 5.4.1 runs the DPI from the real divider clock: the 240 MHz F240M source
+         * over floor(240/70) = 3 is 80 MHz, not the requested 70, and - unlike IDF 5.5.3+/6.1 -
+         * it does not widen the DSI bridge's horizontal total to make up for that rounding. A
+         * line is then 802 px / 80 MHz = 10.03 us, so the panel runs ~14% fast (~65 Hz instead
+         * of the ~57 Hz the M5GFX PR #202 porches intend) and the ST7121 flickers the whole
+         * screen to black irregularly (ref sentinel-bootloader#80). The ST7123 tolerates the
+         * fast timing; the ST7121 does not. Request the exact real clock and widen the bridge
+         * HFP so the real clock gives the intended line period - the same compensation IDF
+         * 5.5.3+/6.1 apply internally; expected == real afterwards so a newer IDF adds no
+         * second correction. Only the ST7121 branch; the ST7123 config above is unchanged.
+         *   real        = 240 / floor(240 / 70)   = 80 MHz
+         *   want_htotal = round(802 * 80 / 70)     = 917 px   (hsw + hbp + hactive + hfp)
+         *   hfp        += 917 - 802                = 40 -> 155
+         * line = 917 / 80 MHz = 11.46 us -> ~57 Hz (the timing sentinel-bootloader#80
+         * verified steady on the ST7121 unit E8:F6). */
+        const int src_mhz = 240;   /* MIPI_DSI_DPI_CLK_SRC_DEFAULT = PLL_F240M on the ESP32-P4 */
+        int want_mhz = dpi_config.dpi_clock_freq_mhz;                                   /* 70 */
+        int real_mhz = src_mhz / (src_mhz / want_mhz);                                  /* 240 / 3 = 80 */
+        int htotal = dpi_config.video_timing.hsync_pulse_width + dpi_config.video_timing.hsync_back_porch +
+                     dpi_config.video_timing.h_size + dpi_config.video_timing.hsync_front_porch;  /* 802 */
+        int want_htotal = (htotal * real_mhz + want_mhz / 2) / want_mhz;                /* round(802*80/70) = 917 */
+        dpi_config.video_timing.hsync_front_porch += want_htotal - htotal;             /* 40 -> 155 */
+        dpi_config.dpi_clock_freq_mhz = real_mhz;                                       /* 70 -> 80 */
     }
 
     // For ST7121, pass init_cmds = NULL so the dedicated esp_lcd_st7121 driver uses its own
