@@ -9920,14 +9920,11 @@ static void show_group_submenu(const char *title, bool radios)
     lv_obj_add_event_cb(g_submenu_popup, submenu_popup_overlay_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *card = lv_obj_create(g_submenu_popup);
-    lv_obj_set_size(card, 500, LV_SIZE_CONTENT);
-    lv_obj_center(card);
     style_popup_card(card, 12, ui_tab_icon_color());
     lv_obj_set_style_pad_all(card, 16, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(card, 12, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *ttl = lv_label_create(card);
     lv_label_set_text(ttl, title);
@@ -9935,7 +9932,6 @@ static void show_group_submenu(const char *title, bool radios)
     lv_obj_set_style_text_color(ttl, dark_mode_enabled ? COLOR_LAB5_MAGENTA : ui_tab_icon_color(), 0);
 
     lv_obj_t *row = lv_obj_create(card);
-    lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(row, 0, 0);
     lv_obj_set_style_pad_all(row, 4, 0);
@@ -9957,6 +9953,60 @@ static void show_group_submenu(const char *title, bool radios)
         create_tile(row, LV_SYMBOL_EYE_OPEN, "Deauth\nDetector", COLOR_MATERIAL_AMBER, submenu_option_cb, "Deauth Detector");
         create_tile(row, LV_SYMBOL_EYE_OPEN, "Anti-Surv", COLOR_MATERIAL_PINK, submenu_option_cb, "Anti-Surv");
     }
+
+    // --- Fit the grid to the tab container ---------------------------------
+    // The card is parented to the tab container, which in a 90/270 landscape is
+    // only ~590 px tall. The old fixed 500 px / 2-column card ran the 8-tile
+    // Radios grid to ~730 px, pushing the title off the top and the bottom row
+    // (Jam Detect / BLE Spam) off the bottom of the screen. Pick a column count
+    // that keeps the whole grid inside popup_clamp_h()/popup_clamp_w(), and only
+    // lock scrolling off when the card actually got the size it wanted - the same
+    // contract the Network Observer popup uses.
+    int tiles = (int)lv_obj_get_child_cnt(row);
+    if (tiles < 1) tiles = 1;
+
+    // Mirror create_tile()'s own size decision so the math matches the tiles.
+    bool large = (lv_disp_get_ver_res(NULL) >= 1000) || (lv_disp_get_hor_res(NULL) >= 960);
+    const lv_coord_t tile_w = large ? 220 : 208;
+    const lv_coord_t tile_h = large ? 154 : 146;
+    const lv_coord_t GAP = 12, CARD_PAD = 16, ROW_PAD = 4, TITLE_H = 34;
+    const lv_coord_t h_budget = popup_clamp_h(10000);  // container height - margin
+    const lv_coord_t w_budget = popup_clamp_w(10000);  // display width - margin
+
+    // Widest column count the screen width allows (never more than one per tile).
+    int max_cols = 1;
+    while (max_cols < tiles &&
+           (lv_coord_t)(2 * CARD_PAD + 2 * ROW_PAD + (max_cols + 1) * tile_w + max_cols * GAP) <= w_budget) {
+        max_cols++;
+    }
+
+    // Start near-square, then add columns until the grid height fits (or we run
+    // out of horizontal room, in which case the card is left scrollable below).
+    int cols = 1;
+    while (cols * cols < tiles) cols++;
+    if (cols > max_cols) cols = max_cols;
+    for (;;) {
+        int r = (tiles + cols - 1) / cols;
+        lv_coord_t h = 2 * CARD_PAD + TITLE_H + GAP + 2 * ROW_PAD + r * tile_h + (r - 1) * GAP;
+        if (h <= h_budget || cols >= max_cols) break;
+        cols++;
+    }
+
+    int rows = (tiles + cols - 1) / cols;
+    lv_coord_t row_w      = 2 * ROW_PAD + cols * tile_w + (cols - 1) * GAP;
+    lv_coord_t card_w     = popup_clamp_w(2 * CARD_PAD + row_w);
+    lv_coord_t card_h_want = 2 * CARD_PAD + TITLE_H + GAP + 2 * ROW_PAD + rows * tile_h + (rows - 1) * GAP;
+    lv_coord_t card_h     = popup_clamp_h(card_h_want);
+
+    // Fix the row to exactly `cols` tiles wide so the flex-wrap is deterministic
+    // (a percentage width can round a pixel short and wrap one tile early).
+    lv_obj_set_size(row, row_w, LV_SIZE_CONTENT);
+    lv_obj_set_size(card, card_w, card_h);
+    lv_obj_center(card);
+    if (card_h >= card_h_want) {
+        lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+    }
+    // else: leave the card scrollable so no tile is stranded off-screen.
 }
 
 static void show_detectors_popup(void) { show_group_submenu("Detectors", false); }
