@@ -210,7 +210,7 @@ ul.tight li b{color:var(--text)}
   <!-- IDEA -->
   <section id="idea">
     <div class="sec-h"><span class="num">01</span><h2>The idea — and two pin domains</h2></div>
-    <p class="sec-sub">The shipping MonsterC5 is just an ESP32-C5 the Tab5 drives as a serial terminal. The <a href="https://claude.ai/artifact/HQsCmS9URedAnXUPgm4ojc">DevKitC build</a> proves that with one cable. Here we do the same wiring, but solder it onto an M5Stack Proto Module so it plugs into the Tab5's M-Bus instead. Keep two sets of pins straight — they are different chips.</p>
+    <p class="sec-sub">This is the build from the <a href="https://claude.ai/artifact/1hEgnsJUiP3hQFLrGXQJDR">M5MonsterC5 Setup Guide</a> — an ESP32-C5 running JanOS with a CC1101 or nRF24 radio, SD and GPS — laid onto an M5Stack Proto Module so it plugs into the Tab5's M-Bus instead of hanging off a loose cable. The wiring is identical to that guide; what's new here is the M-Bus tap and the proto layout. Keep two sets of pins straight — they are different chips.</p>
 
     <div class="grid g2">
       <div class="card"><span class="price">host side</span><h4>The M-Bus tap — 4 nets</h4><p>Everything the build takes from the Tab5: <b>5V</b>, <b>GND</b>, and the UART0 pair <span class="mono">G37/G38</span> (P4 pins). That is the entire interface to the tablet.</p></div>
@@ -450,7 +450,7 @@ ul.tight li b{color:var(--text)}
   <section id="flash">
     <div class="sec-h"><span class="num">06</span><h2>Flash, seat, verify</h2></div>
     <div class="steps">
-      <div class="step"><div class="n">1</div><div class="b"><h3>Flash the C5 first, off the module</h3><p>Flash JanOS over the DevKitC's <b>UART</b> USB-C port (not the native USB port) and prove it on a serial monitor before it goes on the Proto Module. Web flasher at <span class="mono">c5lab.github.io/projectZero</span>, or esptool — see the <a href="https://claude.ai/artifact/HQsCmS9URedAnXUPgm4ojc">DevKitC build</a> for the exact offsets.</p></div></div>
+      <div class="step"><div class="n">1</div><div class="b"><h3>Flash the C5 first, off the module</h3><p>Flash JanOS onto the C5 and prove it on a serial monitor before it goes on the Proto Module (on a DevKitC, use the <b>UART</b> USB-C port, not the native USB port). Web flasher at <span class="mono">c5lab.github.io/projectZero</span>, or esptool — the full flash flow and offsets are in the <a href="https://claude.ai/artifact/1hEgnsJUiP3hQFLrGXQJDR">M5MonsterC5 Setup Guide</a>.</p></div></div>
       <div class="step"><div class="n">2</div><div class="b"><h3>Flash the Tab5 app</h3><p>ESP32-P4 image via <span class="mono">c5lab.github.io/M5MonsterC5-Tab5</span> or esptool (bootloader 0x2000, partitions 0x8000, app 0x10000).</p></div></div>
       <div class="step"><div class="n">3</div><div class="b"><h3>Seat on the M-Bus and boot</h3><p>Mount the module, boot the Tab5. It probes M-Bus/Grove/USB, finds the C5 on UART0, and raises <b>MONSTER DETECTED</b>. A quick <span class="mono">ping → pong</span> is the pass/fail.</p></div></div>
     </div>
@@ -478,7 +478,7 @@ ul.tight li b{color:var(--text)}
 
   <footer>
     <p>MonsterC5 on M5Stack Proto Modules · ESP32-C5 JanOS · M5Stack Tab5 M-Bus</p>
-    <p class="mono">Companion: M5MonsterC5 Setup Guide · MonsterC5 from a DevKitC · M-Bus pinout per docs.m5stack.com/en/core/Tab5</p>
+    <p class="mono">Companion: M5MonsterC5 Setup Guide · M-Bus pinout per docs.m5stack.com/en/core/Tab5</p>
   </footer>
 </div>
 
