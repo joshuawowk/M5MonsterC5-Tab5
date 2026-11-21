@@ -262,7 +262,7 @@ ul.tight li b{color:var(--text)}
     </figure>
 
     <h3>Harness B — the radio bus (C5 to both modules)</h3>
-    <p>The C5's SPI2 (<span class="mono">SCK G6 / MOSI G8 / MISO G5</span>) is a <b>shared bus</b>: every device hangs off the same three wires. Both radios tap it; so does the SD card. What makes a device respond is its own chip-select. Stock JanOS gives the radio header exactly one — <span class="mono">G3</span> — plus one control line <span class="mono">G4</span> (the CC1101's GDO0 / the nRF24's CE). The <b>select switch</b> routes that pair to one module. The other module sits on the bus with its CSN pulled high: deselected, MISO tri-stated, silent.</p>
+    <p>The C5's SPI2 (<span class="mono">SCK G6 / MOSI G8 / MISO G5</span>) is a <b>shared bus</b>: every device hangs off the same three wires. Both radios tap it. What makes a device respond is its own chip-select. Stock JanOS gives the radio header exactly one — <span class="mono">G3</span> — plus one control line <span class="mono">G4</span> (the CC1101's GDO0 / the nRF24's CE). The <b>select switch</b> routes that pair to one module. The other module sits on the bus with its CSN pulled high: deselected, MISO tri-stated, silent.</p>
     <figure>
       <svg viewBox="0 0 920 760" role="img" aria-label="Radio-bus wiring diagram. The ESP32-C5 drives a shared SPI2 bus of three rails SCK, MOSI, MISO that both the E07 CC1101 on the left and the E01 nRF24 on the right tap. A DPDT select switch routes chip-select G3 and control G4 to one radio. A 3V3 LDO off 5V powers both radios with bulk caps.">
         <!-- ===== C5 block ===== -->
@@ -294,7 +294,7 @@ ul.tight li b{color:var(--text)}
 
         <!-- ===== SPI2 bus band ===== -->
         <rect x="96" y="246" width="724" height="70" rx="8" fill="var(--accent-soft)" stroke="color-mix(in srgb,var(--accent) 45%,var(--line))" stroke-width="1.2"/>
-        <text class="d-s" x="104" y="240" text-anchor="start">SPI2 bus — shared by both radios + the SD card</text>
+        <text class="d-s" x="104" y="240" text-anchor="start">SPI2 bus — shared by both radios</text>
         <!-- rails -->
         <line x1="112" y1="266" x2="806" y2="266" style="stroke:#22b8cf;stroke-width:2.6"/>
         <text class="d-xs" x="112" y="262" style="fill:#22b8cf">SCK</text>
@@ -411,12 +411,12 @@ ul.tight li b{color:var(--text)}
     <p>This is the authoritative wire-by-wire list; the diagram is its picture. Colours match. C5 pins give the DevKitC-1 v1.2 header position so you know which hole to use.</p>
     <div class="tbl-wrap">
       <table>
-        <caption>Shared SPI2 bus — three wires, every device on them</caption>
-        <thead><tr><th>Net</th><th>C5 pin</th><th>→ E07 (CC1101)</th><th>→ E01 (nRF24)</th><th>→ SD (optional)</th></tr></thead>
+        <caption>Shared SPI2 bus — three wires, both radios on them</caption>
+        <thead><tr><th>Net</th><th>C5 pin</th><th>→ E07 (CC1101)</th><th>→ E01 (nRF24)</th></tr></thead>
         <tbody>
-          <tr><td><span class="wsw" style="background:#22b8cf"></span>SCK</td><td class="mono">G6 · J1-7</td><td class="mono">pin 3 SCK</td><td class="mono">pin 5 SCK</td><td class="mono">CLK</td></tr>
-          <tr><td><span class="wsw" style="background:#37b24d"></span>MOSI</td><td class="mono">G8 · J1-9</td><td class="mono">pin 2 MOSI</td><td class="mono">pin 6 MOSI</td><td class="mono">MOSI</td></tr>
-          <tr><td><span class="wsw" style="background:#4a7bd6"></span>MISO</td><td class="mono">G5 · J3-9</td><td class="mono">pin 4 MISO/GDO1</td><td class="mono">pin 7 MISO</td><td class="mono">MISO</td></tr>
+          <tr><td><span class="wsw" style="background:#22b8cf"></span>SCK</td><td class="mono">G6 · J1-7</td><td class="mono">pin 3 SCK</td><td class="mono">pin 5 SCK</td></tr>
+          <tr><td><span class="wsw" style="background:#37b24d"></span>MOSI</td><td class="mono">G8 · J1-9</td><td class="mono">pin 2 MOSI</td><td class="mono">pin 6 MOSI</td></tr>
+          <tr><td><span class="wsw" style="background:#4a7bd6"></span>MISO</td><td class="mono">G5 · J3-9</td><td class="mono">pin 4 MISO/GDO1</td><td class="mono">pin 7 MISO</td></tr>
         </tbody>
       </table>
     </div>
@@ -524,7 +524,6 @@ ul.tight li b{color:var(--text)}
           <tr><td>SPI MISO</td><td class="mono">G5</td><td class="mono">D9 (G9)</td><td class="mono">*_MISO 9</td></tr>
           <tr><td>Chip-select</td><td class="mono">G3</td><td class="mono">D0 (G1)</td><td class="mono">*_CS 1</td></tr>
           <tr><td>Control (GDO0/CE)</td><td class="mono">G4</td><td class="mono">D1 (G0)</td><td class="mono">*_GDO0 / CE 0</td></tr>
-          <tr><td>SD chip-select</td><td class="mono">G10</td><td class="mono">D2 (G25)</td><td class="mono">SD_CS 25</td></tr>
         </tbody>
       </table>
     </div>

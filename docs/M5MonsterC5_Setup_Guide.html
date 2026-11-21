@@ -209,7 +209,7 @@ ul.tight li b{color:var(--text)}
     <p class="sec-sub">Three parts, one wire harness. The Tab5 is only a screen and keyboard; every radio operation runs on the ESP32-C5 (firmware: <span class="mono">JanOS</span>). The C5 drives a single <b>swappable radio header</b> — fit a CC1101 for sub-GHz, or an nRF24L01+PA/LNA for 2.4 GHz. They talk to the Tab5 over a plain serial link.</p>
 
     <figure>
-      <svg viewBox="0 0 900 300" role="img" aria-label="M5Stack Tab5 connects to the ESP32-C5 over a serial link at 115200 baud; the ESP32-C5 drives a swappable radio header carrying either a CC1101 or an nRF24, both on the SPI2 bus that it shares with the SD card.">
+      <svg viewBox="0 0 900 300" role="img" aria-label="M5Stack Tab5 connects to the ESP32-C5 over a serial link at 115200 baud; the ESP32-C5 drives a swappable radio header carrying either a CC1101 or an nRF24, both on the C5's SPI2 bus.">
         <!-- boxes -->
         <rect class="d-box" x="24"  y="70" width="210" height="150" rx="12"/>
         <rect class="d-box" x="345" y="70" width="210" height="150" rx="12"/>
@@ -225,7 +225,7 @@ ul.tight li b{color:var(--text)}
         <text class="d-sub" x="129" y="176" text-anchor="middle">screen · touch</text>
         <text class="d-sub" x="129" y="194" text-anchor="middle">keyboard</text>
         <text class="d-sub" x="450" y="176" text-anchor="middle">Wi-Fi 2.4/5 GHz</text>
-        <text class="d-sub" x="450" y="194" text-anchor="middle">SD · GPS · radio</text>
+        <text class="d-sub" x="450" y="194" text-anchor="middle">GPS · radio</text>
         <text class="d-sub" x="771" y="176" text-anchor="middle">sub-GHz OOK/ASK</text>
         <text class="d-sub" x="771" y="194" text-anchor="middle">— or 2.4 GHz ESB/jam</text>
 
@@ -242,7 +242,7 @@ ul.tight li b{color:var(--text)}
         <polygon points="666,140 656,135 656,145" fill="var(--accent)"/>
         <polygon points="555,140 565,135 565,145" fill="var(--accent)"/>
         <text class="d-band" x="610" y="122" text-anchor="middle">SPI2</text>
-        <text class="d-pin"  x="610" y="182" text-anchor="middle">shared w/ SD</text>
+        <text class="d-pin"  x="610" y="182" text-anchor="middle">radio bus</text>
 
         <!-- power rail note -->
         <line class="w-pwr" x1="129" y1="248" x2="771" y2="248"/>
@@ -251,19 +251,18 @@ ul.tight li b{color:var(--text)}
       <figcaption>The Tab5 sends text commands (<span class="mono">subghz_rx</span>, <span class="mono">init_nrf24</span>, <span class="mono">wifi_scan</span>…) over UART and renders the log lines the C5 prints back. Radio work never leaves the C5. One radio sits on the header at a time — CC1101 and nRF24 share the same chip-select and control pins.</figcaption>
     </figure>
 
-    <div class="note info"><span class="ic">i</span><p><b>Buy or build?</b> The $75 M5MonsterC5 board is the ESP32-C5 pre-mounted with the Grove/M5Bus connectors, an SD slot and a GPS port — plug-and-play. A DIY <b>ESP32-C5-DevKitC-1</b> (~$15) does the same electrically; you add the radio and (optionally) a microSD breakout with a few jumpers. This guide covers both — the wiring below is identical, the store board just pre-makes the Tab5 connection.</p></div>
+    <div class="note info"><span class="ic">i</span><p><b>Buy or build?</b> The $75 M5MonsterC5 board is the ESP32-C5 pre-mounted with the Grove/M5Bus connectors and a GPS port — plug-and-play. A DIY <b>ESP32-C5-DevKitC-1</b> (~$15) does the same electrically; you add the radio with a few jumpers. This guide covers both — the wiring below is identical, the store board just pre-makes the Tab5 connection. <b>Storage is the Tab5's own microSD</b>: the C5 streams captures to it over the link, so no SD card wires to the C5.</p></div>
   </section>
 
   <!-- PARTS -->
   <section id="parts">
     <div class="sec-h"><span class="num">02</span><h2>What you need</h2></div>
-    <p class="sec-sub">Minimum is an ESP32-C5 and the Tab5. Add a radio for the header — a CC1101 for sub-GHz, an nRF24L01+PA/LNA for 2.4 GHz — plus an SD card for capture storage and captive portals, and GPS for wardriving.</p>
+    <p class="sec-sub">Minimum is an ESP32-C5 and the Tab5. Add a radio for the header — a CC1101 for sub-GHz, an nRF24L01+PA/LNA for 2.4 GHz — and GPS for wardriving. Captures are written to the Tab5's own microSD; nothing SD wires to the C5.</p>
     <div class="grid g2">
       <div class="card"><span class="price">required</span><h4>ESP32-C5 board</h4><p>M5MonsterC5, or an ESP32-C5-DevKitC-1. Must be the C5 — it is the only ESP32 with 2.4 <em>and</em> 5 GHz Wi-Fi.</p></div>
       <div class="card"><span class="price">required</span><h4>M5Stack Tab5</h4><p>ESP32-P4 tablet. Runs the M5MonsterC5-Tab5 UI app.</p></div>
       <div class="card"><span class="price">sub-GHz</span><h4>CC1101 module</h4><p>Any 3.3 V CC1101 breakout — E07-M1101D, or the SMD <span class="mono">E07-433M20S</span> (+20 dBm). Needs SCK/MOSI/MISO/CSN/GDO0 broken out.</p></div>
       <div class="card"><span class="price">2.4 GHz</span><h4>nRF24L01+PA/LNA</h4><p>A +PA/LNA module such as the Ebyte <span class="mono">E01-2G4M27SX</span> (nRF24L01P, +27 dBm). 3.3 V only, and it <b>must</b> be decoupled — see the wiring section.</p></div>
-      <div class="card"><span class="price">storage</span><h4>microSD + breakout</h4><p>On the store board it's built in. For DIY, a 3.3 V SPI microSD breakout on the shared bus.</p></div>
       <div class="card"><span class="price">optional</span><h4>GPS module</h4><p>ATGM336H (9600) or M5Stack GPS v1.1 (115200) for wardrive location.</p></div>
     </div>
     <div class="note info"><span class="ic">i</span><p><b>LoRa is not sub-GHz here.</b> A LoRa module like the <span class="mono">E22-900M22S</span> (SX1262) is a different chip from the CC1101 — JanOS does not drive it, so it won't appear on the SubGHz or nRF24 screens. Noted only because it's easy to buy by mistake alongside the E07; treat SX1262/LoRa as future work, not part of this build.</p></div>
@@ -272,7 +271,7 @@ ul.tight li b{color:var(--text)}
   <!-- WIRING -->
   <section id="wiring">
     <div class="sec-h"><span class="num">03</span><h2>Wiring</h2></div>
-    <p class="sec-sub">Two harnesses: a 4-wire UART from the Tab5 to the C5, and one 3.3 V radio on the C5's SPI2 bus (the same bus the SD card uses — each device just gets its own chip-select). The CC1101 and the nRF24 land on the <b>same swappable header</b>: identical SCK/MOSI/MISO, and they share the chip-select (<span class="mono">G3</span>) and control pin (<span class="mono">G4</span>). Fit one radio at a time. All logic is 3.3 V.</p>
+    <p class="sec-sub">Two harnesses: a 4-wire UART from the Tab5 to the C5, and one 3.3 V radio on the C5's SPI2 bus. The CC1101 and the nRF24 land on the <b>same swappable header</b>: identical SCK/MOSI/MISO, and they share the chip-select (<span class="mono">G3</span>) and control pin (<span class="mono">G4</span>). Fit one radio at a time. All logic is 3.3 V.</p>
 
     <h3>Harness A — the C5 to the Tab5 (4 wires)</h3>
     <figure>
@@ -313,12 +312,12 @@ ul.tight li b{color:var(--text)}
       </div>
     </figure>
 
-    <h3>Harness B — the C5 to one radio (SPI2, shared with SD)</h3>
+    <h3>Harness B — the C5 to one radio (SPI2)</h3>
     <figure>
       <svg viewBox="0 0 820 430" role="img" aria-label="Wiring diagram: the ESP32-C5 SPI2 bus to one radio. G6 to SCK, G8 to MOSI, G5 to MISO, G3 to CSN, G4 to the control pin (CC1101 GDO0 or nRF24 CE), 3V3 to VCC, GND to GND. The CC1101 and nRF24 share this one header, one at a time.">
         <rect class="board" x="56" y="44" width="150" height="346" rx="8"/>
         <text class="d-title" x="131" y="72" text-anchor="middle">ESP32-C5</text>
-        <text class="d-sub" x="131" y="90" text-anchor="middle">SPI2 · shared w/ SD</text>
+        <text class="d-sub" x="131" y="90" text-anchor="middle">SPI2 bus</text>
         <rect class="board" x="614" y="44" width="150" height="346" rx="8"/>
         <text class="d-title" x="689" y="72" text-anchor="middle">Radio header</text>
         <text class="d-sub" x="689" y="90" text-anchor="middle">CC1101 / nRF24</text>
@@ -349,9 +348,9 @@ ul.tight li b{color:var(--text)}
         <path class="lead" style="stroke:#f08c00" d="M211 340 C 360 340, 460 340, 609 340"/>
         <path class="lead" style="stroke:#868e96" d="M211 372 C 360 372, 460 372, 609 372"/>
         <text class="d-xs" x="410" y="116" text-anchor="middle">one radio on the header at a time</text>
-        <text class="d-xs" x="410" y="404" text-anchor="middle">SD rides the same SCK / MOSI / MISO on its own CS (G10)</text>
+        <text class="d-xs" x="410" y="404" text-anchor="middle">no SD on the C5 — storage is the Tab5's internal microSD</text>
       </svg>
-      <figcaption>The radio bus, pin to pin. <span class="mono">G6/G8/G5</span> are the shared SPI2 (the SD card is on the same three wires, its own CS on <span class="mono">G10</span>). <span class="mono">G3</span> (CSN) wants a 10k pull-up and <span class="mono">G4</span> a 4.7k pull-down so the bus boots sane. <span class="mono">G4</span> is the CC1101's <b>GDO0</b> or the nRF24's <b>CE</b>, depending on which radio is fitted — one at a time. All logic and power is 3.3 V.</figcaption>
+      <figcaption>The radio bus, pin to pin. <span class="mono">G6/G8/G5</span> are the shared SPI2 bus. <span class="mono">G3</span> (CSN) wants a 10k pull-up and <span class="mono">G4</span> a 4.7k pull-down so the bus boots sane. <span class="mono">G4</span> is the CC1101's <b>GDO0</b> or the nRF24's <b>CE</b>, depending on which radio is fitted — one at a time. All logic and power is 3.3 V.</figcaption>
       <div class="legend">
         <span class="lg"><span class="wire" style="background:#22b8cf"></span>SCK</span>
         <span class="lg"><span class="wire" style="background:#37b24d"></span>MOSI</span>
@@ -380,7 +379,7 @@ ul.tight li b{color:var(--text)}
     </div>
     <p class="mono" style="font-size:13px;color:var(--muted)">The app defaults to the <span class="pin">M5Bus</span> port (GPIO37/38) and also watches <span class="pin">Grove</span> (GPIO53/54) and USB — it auto-detects the C5 on whichever port answers, so either harness works. Common ground is required on both.</p>
 
-    <h3>ESP32-C5 → CC1101 (SPI2, shared with the SD card)</h3>
+    <h3>ESP32-C5 → CC1101 (SPI2)</h3>
     <div class="tbl-wrap">
       <table>
         <caption>SPI mode 0 · 2 MHz (CC1101 max ~6.5 MHz) · 3.3 V</caption>
@@ -420,20 +419,19 @@ ul.tight li b{color:var(--text)}
 
     <div class="note warn"><span class="ic">!</span><p><b>Decouple the PA/LNA, or it browns out on TX.</b> A +PA/LNA module spikes to ~115 mA on transmit. Fit a <b>100 nF + 10 µF + 100 µF</b> stack across VCC–GND <em>at the module's own pins</em> (smallest closest), and feed VCC from a stiff 3.3 V — for the PA/LNA, ideally a dedicated 3V3 LDO off 5 V, never a GPIO and never 5 V direct. Full build, with a 3D view and a bill of materials, is in the companion guides: <a href="https://claude.ai/artifact/RgPE8E2JqgnbLeVjTSFcmy">Decouple the nRF24</a>, the <a href="https://claude.ai/artifact/8w24xS2Vjx8vRfS5Fawi2p">Swappable Radio Header</a>, and the 5× <a href="https://claude.ai/artifact/9BKmvfmY4qNFRxTDk5PEF7">Penta nRF24 Daughterboard</a>.</p></div>
 
-    <div class="note stop"><span class="ic">✕</span><p><b>One radio at a time, and mind the reserved pins.</b> The CC1101 and nRF24 share <span class="mono">G3</span> (CSN) and <span class="mono">G4</span> (GDO0 / CE) — never socket both at once. <span class="mono">GPIO15–22</span> are the C5's in-package flash + Quad-PSRAM (MSPI) bus — touching them bricks the boot. <span class="mono">GPIO11/12</span> are the console UART the Tab5 depends on. <span class="mono">GPIO2</span> and <span class="mono">GPIO7</span> are strapping pins (why MOSI/MISO moved to G8/G5). The SD card rides the same SPI2 bus on its own CS <span class="mono">G10</span>; GPS is its own UART on <span class="mono">G13/G14</span>.</p></div>
+    <div class="note stop"><span class="ic">✕</span><p><b>One radio at a time, and mind the reserved pins.</b> The CC1101 and nRF24 share <span class="mono">G3</span> (CSN) and <span class="mono">G4</span> (GDO0 / CE) — never socket both at once. <span class="mono">GPIO15–22</span> are the C5's in-package flash + Quad-PSRAM (MSPI) bus — touching them bricks the boot. <span class="mono">GPIO11/12</span> are the console UART the Tab5 depends on. <span class="mono">GPIO2</span> and <span class="mono">GPIO7</span> are strapping pins (why MOSI/MISO moved to G8/G5). GPS is its own UART on <span class="mono">G13/G14</span>. Storage is the Tab5's internal microSD — no SD wires to the C5.</p></div>
 
     <details class="card" style="margin-top:16px">
-      <summary style="cursor:pointer;font-weight:600">Optional: microSD &amp; GPS pins</summary>
+      <summary style="cursor:pointer;font-weight:600">Optional: GPS pins · and where captures go</summary>
       <div class="tbl-wrap" style="margin-top:12px">
         <table>
           <thead><tr><th>Peripheral</th><th>Signal → C5 pin</th></tr></thead>
           <tbody>
-            <tr><td>microSD (SPI2)</td><td class="mono">MISO G5 · MOSI G8 · CLK G6 · CS G10</td></tr>
             <tr><td>GPS (UART1)</td><td class="mono">TX G13 · RX G14</td></tr>
           </tbody>
         </table>
       </div>
-      <p style="margin-top:10px">SD shares the same three SPI2 lines as the radio header (MISO G5 / MOSI G8 / CLK G6) with its own CS (GPIO10) — both live on the bus at once. GPS is its own UART.</p>
+      <p style="margin-top:10px"><b>No SD hangs off the C5.</b> The MonsterC5 stores captures to the <b>Tab5's internal microSD</b> — the C5 streams them over the UART link. (JanOS can still mount a C5-side SD on <span class="mono">G5/G8/G6</span> + CS <span class="mono">G10</span> if you add one, but the MonsterC5 doesn't.) GPS is its own UART.</p>
     </details>
   </section>
 
@@ -514,7 +512,7 @@ ul.tight li b{color:var(--text)}
         <thead><tr><th>Screen</th><th>Command</th><th>What it does</th></tr></thead>
         <tbody>
           <tr><td>Listen</td><td class="mono">subghz_rx [raw] rssi=</td><td>Receive + decode (or raw), live RSSI</td></tr>
-          <tr><td>Manage</td><td class="mono">subghz_list / tx / save / rename / delete</td><td>Stored signals on SD (Flipper <span class="mono">.sub</span>)</td></tr>
+          <tr><td>Manage</td><td class="mono">subghz_list / tx / save / rename / delete</td><td>Stored signals (Flipper <span class="mono">.sub</span>) on the Tab5's microSD</td></tr>
           <tr><td>Jammer</td><td class="mono">subghz_jam</td><td>Continuous carrier on the current freq</td></tr>
           <tr><td>Tesla</td><td class="mono">subghz_tx tesla</td><td>Charge-port opener burst</td></tr>
           <tr><td>Hunter</td><td class="mono">subghz_freq_analyzer … hunt</td><td>Find a live freq, auto-capture</td></tr>
@@ -568,7 +566,7 @@ ul.tight li b{color:var(--text)}
           <tr><td>nRF24 works, then drops on TX</td><td>PA/LNA brownout — add the 100 µF bulk cap at the module and feed a stiff 3.3 V (dedicated LDO off 5 V).</td></tr>
           <tr><td>Nothing captured in Listen</td><td>Antenna missing, wrong band, or RSSI floor too high. Set the floor to −85 and press a remote up close.</td></tr>
           <tr><td>Replayed signal ignored by device</td><td>RF timing needs a bench-tuning pass; verify the capture's edge count looks sane in Manage.</td></tr>
-          <tr><td>SD features greyed out</td><td>No SD on the C5, or wrong SPI pins (MISO G5 / MOSI G8 / CLK G6 / CS G10).</td></tr>
+          <tr><td>Captures not saving</td><td>Storage is the Tab5's internal microSD — confirm the Tab5 has a card inserted and mounted. There's no SD on the C5 to check.</td></tr>
         </tbody>
       </table>
     </div>
