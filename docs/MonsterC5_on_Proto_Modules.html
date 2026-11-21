@@ -455,6 +455,7 @@ ul.tight li b{color:var(--text)}
 <span class="k">#define</span> NRF24_CS_PIN     <span class="s">1</span>    <span class="c">// move nRF24 CSN to a free pin (e.g. G1 / J1-6)</span>
 <span class="k">#define</span> NRF24_CE_PIN     <span class="s">0</span>    <span class="c">// move nRF24 CE   to a free pin (e.g. G0 / J1-5)</span></div>
     <p>Then skip the DPDT: wire E07 CSN→G3, E01 CSN→G1, E07 GDO0→G4, E01 CE→G0, everything else as the net list. Keep clear of the strapping pins (<span class="mono">G2/G7/G25/G26/G27/G28</span>) when you choose.</p>
+    <div class="note info"><span class="ic">i</span><p><b>Already done for you on the XIAO.</b> The <a href="MonsterC5_on_Proto_Modules_XIAO.html">XIAO C5 build</a> ships a JanOS branch with exactly this dual-chip-select remap (plus the XIAO's own pad map), with both radios drawn wired at once and no switch. If you're on a XIAO — or just want the no-switch wiring worked end to end — start there.</p></div>
   </section>
 
   <!-- LAYOUT -->

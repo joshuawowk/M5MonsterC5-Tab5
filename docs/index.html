@@ -114,9 +114,14 @@
         <a href="M5MonsterC5_Setup_Guide.html">Open setup guide</a>
       </div>
       <div class="tile">
-        <h2>Build MonsterC5 on a proto module</h2>
-        <p>Build the DIY MonsterC5 — ESP32-C5 + radio + SD/GPS — onto M5Stack Proto Modules seated on the Tab5's M-Bus: the 4-net tap, the C5-side wiring, and layout across one or two modules.</p>
-        <a href="MonsterC5_on_Proto_Modules.html">Open proto build guide</a>
+        <h2>Proto build — DevKitC + both radios</h2>
+        <p>Put the DIY MonsterC5 — ESP32-C5-DevKitC-1 + the E07 (CC1101) and E01 (nRF24) + SD/GPS — on M5Stack Proto Modules seated on the Tab5's M-Bus. Point-to-point wiring, a DPDT switch to share the one chip-select, power and PA notes.</p>
+        <a href="MonsterC5_on_Proto_Modules.html">Open DevKitC proto guide</a>
+      </div>
+      <div class="tile">
+        <h2>Proto build — XIAO C5, both radios live</h2>
+        <p>The same build on a Seeed XIAO ESP32-C5 with a re-pinned JanOS that gives each radio its own chip-select — so the E07 and E01 both stay wired at once, no switch. Point-to-point wiring on the XIAO's pads, firmware map, power and PA.</p>
+        <a href="MonsterC5_on_Proto_Modules_XIAO.html">Open XIAO proto guide</a>
       </div>
     </div>
   </div>
