@@ -186,7 +186,7 @@ ul.tight li b{color:var(--text)}
     <h3>Two pin domains — keep them straight</h3>
     <div class="grid g2">
       <div class="card"><span class="price">host side</span><h4>The M-Bus tap — 4 wires</h4><p>All the board takes from the Tab5: <b>5V</b>, <b>GND</b>, and the UART0 pair <span class="mono">G37/G38</span> (ESP32-P4 pins). The XIAO's console is on <span class="mono">D6/D7</span> (= <span class="mono">G11/G12</span>) — it lines up with the tap unchanged.</p></div>
-      <div class="card"><span class="price">board side</span><h4>The XIAO build — its own pads</h4><p>The radios, their LDO and the bus hang off the <b>XIAO's own pads</b> (<span class="mono">D0/D1/D2/D4/D5/D8/D9/D10</span>), wired across the proto grid — never onto M-Bus pins. Ten of the XIAO's eleven pads are used; one is left spare.</p></div>
+      <div class="card"><span class="price">board side</span><h4>The XIAO build — its own pads</h4><p>The radios, their LDO and the bus hang off the <b>XIAO's own pads</b> (<span class="mono">D0/D1/D4/D5/D8/D9/D10</span>), wired across the proto grid — never onto M-Bus pins. With the two console pads that's nine of the eleven used; <span class="mono">D2</span> and <span class="mono">D3</span> stay free — no SD hangs off the C5 (storage is the Tab5's internal microSD).</p></div>
     </div>
   </section>
 
@@ -217,7 +217,7 @@ ul.tight li b{color:var(--text)}
   <!-- FIRMWARE -->
   <section id="firmware">
     <div class="sec-h"><span class="num">03</span><h2>The firmware — JanOS, re-pinned for the XIAO</h2></div>
-    <p class="sec-sub">This build runs a JanOS branch that moves the whole radio/SD bus onto the XIAO's broken-out pads and splits the one shared chip-select into two. Flash it <em>before</em> the XIAO goes on the board. The map below is what the branch already defines — you don't edit anything unless your wiring differs.</p>
+    <p class="sec-sub">This build runs a JanOS branch that moves the radio bus onto the XIAO's broken-out pads and splits the one shared chip-select into two. Flash it <em>before</em> the XIAO goes on the board. The map below is what the branch defines for this build — you don't edit anything unless your wiring differs. (Storage is the Tab5's internal microSD; no SD wires to the C5.)</p>
     <div class="tbl-wrap">
       <table>
         <caption>JanOS pin map · stock C5 → XIAO pad (GPIO)</caption>
@@ -231,11 +231,10 @@ ul.tight li b{color:var(--text)}
           <tr><td><b>CC1101</b> GDO0</td><td class="mono">G4</td><td class="mono">D5 · G24</td><td class="mono">CC1101_PIN_GDO0 24</td></tr>
           <tr><td><b>nRF24</b> CSN</td><td class="mono">G3 (shared)</td><td class="mono">D0 · G1</td><td class="mono">NRF24_CS_PIN 1</td></tr>
           <tr><td><b>nRF24</b> CE</td><td class="mono">G4 (shared)</td><td class="mono">D1 · G0</td><td class="mono">NRF24_CE_PIN 0</td></tr>
-          <tr><td>SD chip-select</td><td class="mono">G10</td><td class="mono">D2 · G25</td><td class="mono">SD_CS_PIN 25</td></tr>
         </tbody>
       </table>
     </div>
-    <p>The change that makes both radios coexist is the two highlighted rows: the CC1101 keeps a dedicated pair on <span class="mono">D4/D5</span>, and the nRF24 moves to its <em>own</em> <span class="mono">D0/D1</span> — they no longer collide on <span class="mono">G3/G4</span>. These are the exact edits in the branch:</p>
+    <p>The change that makes both radios coexist is in the CC1101 and nRF24 rows: the CC1101 keeps a dedicated pair on <span class="mono">D4/D5</span>, and the nRF24 moves to its <em>own</em> <span class="mono">D0/D1</span> — they no longer collide on <span class="mono">G3/G4</span>. These are the exact edits in the branch:</p>
     <div class="code"><span class="c">// components/cc1101/include/cc1101.h — dedicated CC1101 pins</span>
 <span class="k">#define</span> CC1101_PIN_SCK   <span class="s">8</span>    <span class="c">// D8</span>
 <span class="k">#define</span> CC1101_PIN_MISO  <span class="s">9</span>    <span class="c">// D9</span>
@@ -245,7 +244,7 @@ ul.tight li b{color:var(--text)}
 <span class="c">// components/nrf24_jammer/nrf24_jammer.c — dedicated nRF24 pins</span>
 <span class="k">#define</span> NRF24_CS_PIN     <span class="s">1</span>    <span class="c">// D0  — own chip-select (no longer G3)</span>
 <span class="k">#define</span> NRF24_CE_PIN     <span class="s">0</span>    <span class="c">// D1  — own control     (no longer G4)</span></div>
-    <div class="note info"><span class="ic">i</span><p><b>Boot-safe pads.</b> ESP32-C5 strapping pins are <span class="mono">G2/G3/G7/G25/G26/G27/G28</span>. Of the pads used here only <b>SD CS = G25 (D2)</b> is a strapping pin, and its strap role is non-critical for SPI boot — it idles high as a deselected CS. <span class="mono">D8/D9/D10</span> are the XIAO's native, non-strapping SPI pads. <span class="mono">D3 (G7)</span> is left spare (it's a strapping pin; the firmware only touches it transiently for the SPI self-test).</p></div>
+    <div class="note info"><span class="ic">i</span><p><b>Boot-safe pads.</b> ESP32-C5 strapping pins are <span class="mono">G2/G3/G7/G25/G26/G27/G28</span>. <b>None of the pads this build wires lands on one:</b> <span class="mono">D8/D9/D10</span> are the XIAO's native, non-strapping SPI pads, and the radios' CS/ctrl sit on <span class="mono">D0/D1/D4/D5</span> (G1/G0/G23/G24). The two free pads, <span class="mono">D2 (G25)</span> and <span class="mono">D3 (G7)</span>, are both strapping pins — fine, since nothing in normal operation drives them (D3 is the firmware's transient SPI self-test scratch pad).</p></div>
   </section>
 
   <!-- WIRING -->
@@ -293,7 +292,7 @@ ul.tight li b{color:var(--text)}
     </figure>
 
     <h3>Harness B — the radio bus (both radios, dedicated CS, no switch)</h3>
-    <p>The XIAO's SPI2 (<span class="mono">SCK D8 / MOSI D10 / MISO D9</span>) is a <b>shared bus</b>: every device hangs off the same three wires. Both radios tap it; so does the SD card. What makes a device respond is its own chip-select — and in this build each radio has one. The <span style="color:#e64980">CC1101 CS (D4)</span> and <span style="color:#9b5de5">GDO0 (D5)</span> run straight to the E07; the <span style="color:#e64980">nRF24 CSN (D0)</span> and <span style="color:#9b5de5">CE (D1)</span> run straight to the E01. The idle radio sits with its CSN high: deselected, MISO tri-stated, silent.</p>
+    <p>The XIAO's SPI2 (<span class="mono">SCK D8 / MOSI D10 / MISO D9</span>) is a <b>shared bus</b>: both radios hang off the same three wires. What makes a device respond is its own chip-select — and in this build each radio has one. The <span style="color:#e64980">CC1101 CS (D4)</span> and <span style="color:#9b5de5">GDO0 (D5)</span> run straight to the E07; the <span style="color:#e64980">nRF24 CSN (D0)</span> and <span style="color:#9b5de5">CE (D1)</span> run straight to the E01. The idle radio sits with its CSN high: deselected, MISO tri-stated, silent.</p>
     <figure>
       <svg viewBox="0 0 940 760" role="img" aria-label="Radio-bus wiring diagram. The XIAO ESP32-C5 drives a shared SPI2 bus of three rails SCK, MOSI, MISO that both the E07 CC1101 on the left and the E01 nRF24 on the right tap. The CC1101 chip-select D4 and control D5 run directly to the E07; the nRF24 chip-select D0 and control D1 run directly to the E01 — no select switch. A 3V3 LDO off 5V powers both radios with bulk caps.">
         <!-- ===== XIAO block ===== -->
@@ -331,7 +330,7 @@ ul.tight li b{color:var(--text)}
 
         <!-- ===== SPI2 bus band ===== -->
         <rect x="96" y="246" width="748" height="70" rx="8" fill="var(--accent-soft)" stroke="color-mix(in srgb,var(--accent) 45%,var(--line))" stroke-width="1.2"/>
-        <text class="d-s" x="104" y="240" text-anchor="start">SPI2 bus — shared by both radios + the SD card</text>
+        <text class="d-s" x="104" y="240" text-anchor="start">SPI2 bus — shared by both radios</text>
         <line x1="112" y1="266" x2="830" y2="266" style="stroke:#22b8cf;stroke-width:2.6"/>
         <text class="d-xs" x="112" y="262" style="fill:#22b8cf">SCK</text>
         <line x1="112" y1="288" x2="830" y2="288" style="stroke:#37b24d;stroke-width:2.6"/>
@@ -435,11 +434,11 @@ ul.tight li b{color:var(--text)}
     <div class="tbl-wrap">
       <table>
         <caption>Shared SPI2 bus — three wires, every device on them</caption>
-        <thead><tr><th>Net</th><th>XIAO pad · GPIO</th><th>→ E07 (CC1101)</th><th>→ E01 (nRF24)</th><th>→ SD (optional)</th></tr></thead>
+        <thead><tr><th>Net</th><th>XIAO pad · GPIO</th><th>→ E07 (CC1101)</th><th>→ E01 (nRF24)</th></tr></thead>
         <tbody>
-          <tr><td><span class="wsw" style="background:#22b8cf"></span>SCK</td><td class="mono">D8 · G8</td><td class="mono">pin 3 SCK</td><td class="mono">pin 5 SCK</td><td class="mono">CLK</td></tr>
-          <tr><td><span class="wsw" style="background:#37b24d"></span>MOSI</td><td class="mono">D10 · G10</td><td class="mono">pin 2 MOSI</td><td class="mono">pin 6 MOSI</td><td class="mono">MOSI</td></tr>
-          <tr><td><span class="wsw" style="background:#4a7bd6"></span>MISO</td><td class="mono">D9 · G9</td><td class="mono">pin 4 MISO/GDO1</td><td class="mono">pin 7 MISO</td><td class="mono">MISO</td></tr>
+          <tr><td><span class="wsw" style="background:#22b8cf"></span>SCK</td><td class="mono">D8 · G8</td><td class="mono">pin 3 SCK</td><td class="mono">pin 5 SCK</td></tr>
+          <tr><td><span class="wsw" style="background:#37b24d"></span>MOSI</td><td class="mono">D10 · G10</td><td class="mono">pin 2 MOSI</td><td class="mono">pin 6 MOSI</td></tr>
+          <tr><td><span class="wsw" style="background:#4a7bd6"></span>MISO</td><td class="mono">D9 · G9</td><td class="mono">pin 4 MISO/GDO1</td><td class="mono">pin 7 MISO</td></tr>
         </tbody>
       </table>
     </div>
@@ -455,14 +454,13 @@ ul.tight li b{color:var(--text)}
     </div>
     <div class="tbl-wrap">
       <table>
-        <caption>Power, PA, SD &amp; the pins you don't wire to the bus</caption>
+        <caption>Power, PA &amp; the pins you don't wire to the bus</caption>
         <thead><tr><th>Net / pin</th><th>E07 (CC1101)</th><th>E01 (nRF24)</th><th>Note</th></tr></thead>
         <tbody>
           <tr class="pwr"><td><span class="wsw" style="background:#f08c00"></span>VCC 3V3</td><td class="mono">pin 11</td><td class="mono">pin 2</td><td>from the LDO, not the XIAO 3V3 pad</td></tr>
           <tr><td><span class="wsw" style="background:#868e96"></span>GND</td><td class="mono">pins 1, 12</td><td class="mono">pin 1</td><td>common; star at the LDO</td></tr>
           <tr><td>RX_EN</td><td class="mono">pin 9 → 3V3</td><td>—</td><td>PA RF-switch: high = receive-ready</td></tr>
           <tr><td>TX_EN</td><td class="mono">pin 8 → GND</td><td>—</td><td>tie low for RX; drive high to transmit</td></tr>
-          <tr class="tap"><td>SD chip-select</td><td>—</td><td>—</td><td class="mono">D2 · G25 → SD CS (own CS on the shared bus)</td></tr>
           <tr class="rsv"><td>IRQ</td><td>—</td><td class="mono">pin 8 → n/c</td><td>firmware polls; leave open</td></tr>
           <tr class="rsv"><td>GDO2</td><td class="mono">pin 5 → n/c</td><td>—</td><td>dropped by firmware</td></tr>
         </tbody>
@@ -516,8 +514,8 @@ ul.tight li b{color:var(--text)}
       </svg>
       <figcaption>One M001 board, to scale: XIAO C5 top-left, E07 (CC1101) down the right edge, E01 (nRF24) mid-left, the LDO in the middle (where the other build's switch sat), and the 2×15 M-Bus connector along the bottom edge. Keep the IPEX antennas and their coax pointed off-board.</figcaption>
     </figure>
-    <div class="note warn"><span class="ic">!</span><div>
-      <p><b>GPS doesn't fit this XIAO build — pick two of three.</b> Stock GPS is on <span class="mono">G13/G14</span>, and <b>neither pin is broken out on the XIAO</b>. With the shared SPI (3 pads) + CC1101 CS/ctrl (2) + nRF24 CS/ctrl (2) + SD CS (1) you've used 8 of the 9 non-console pads; only <span class="mono">D3</span> is spare — not the two a GPS UART needs. So on one XIAO you can have <b>both radios + SD</b> (this build) <em>or</em> <b>both radios + GPS</b> (drop the SD CS, wire GPS TX/RX to <span class="mono">D2/D3</span>), but not all four. For SD <em>and</em> GPS together, use the underside JTAG pads for GPS, or the <a href="MonsterC5_on_Proto_Modules.html">DevKitC build</a>, which breaks out more pins.</p>
+    <div class="note info"><span class="ic">i</span><div>
+      <p><b>No SD on the C5 — and that frees up pads.</b> The MonsterC5 stores to the <b>Tab5's internal microSD</b>; nothing SD-related wires to the C5, so the shared bus carries just the two radios and <span class="mono">D2</span> and <span class="mono">D3</span> stay free. If you want on-board <b>GPS</b> for wardriving, there's now room — but the stock GPS pins <span class="mono">G13/G14</span> aren't broken out on the XIAO, so remap the GPS UART onto the two free pads in firmware. GPS <em>and</em> E07 transmit (<a href="#power">which also wants two pads</a>) would run you out — for both, use the <a href="MonsterC5_on_Proto_Modules.html">DevKitC build</a>, which breaks out more pins.</p>
     </div></div>
   </section>
 
@@ -533,7 +531,7 @@ ul.tight li b{color:var(--text)}
     <p>The E07-433M20S puts a PA and an antenna switch in front of the CC1101. Two pins steer it, and they're mutually exclusive:</p>
     <ul class="tight">
       <li><b>Receive / scan only</b> (what stock firmware does): tie <span class="mono">RX_EN → 3V3</span> and <span class="mono">TX_EN → GND</span>. The module sits in receive; the CC1101 talks over SPI as normal. No firmware change.</li>
-      <li><b>Transmit too:</b> wire <span class="mono">TX_EN</span> and <span class="mono">RX_EN</span> to two spare pads and drive <span class="mono">TX_EN</span> high (RX_EN low) only while sending, low again after. Never both high. On the XIAO that costs you the one spare pad (<span class="mono">D3</span>) plus one more — trade against SD/GPS.</li>
+      <li><b>Transmit too:</b> wire <span class="mono">TX_EN</span> and <span class="mono">RX_EN</span> to two spare pads and drive <span class="mono">TX_EN</span> high (RX_EN low) only while sending, low again after. Never both high. The XIAO's two free pads (<span class="mono">D2/D3</span>) cover this — enough for the TX_EN/RX_EN pair <em>or</em> an optional GPS UART, but not both at once.</li>
     </ul>
     <div class="note warn"><span class="ic">!</span><p>The bare-CC1101 firmware never touches <span class="mono">TX_EN/RX_EN</span>. If you leave them floating the PA switch is undefined and range collapses — always tie them, even for receive. The plain <b>E07-433M10S</b> (10-pin, no PA) has no such pins; this applies only to the <b>M20S</b> you ordered.</p></div>
   </section>
@@ -569,7 +567,7 @@ ul.tight li b{color:var(--text)}
           <tr><td>E07 transmits weak / short range</td><td><span class="mono">TX_EN/RX_EN</span> floating. Tie <span class="mono">RX_EN→3V3, TX_EN→GND</span> for receive; drive them for TX.</td></tr>
           <tr><td>Radio browns out / resets on TX</td><td>The 490 mA burst is sagging 3V3 — add the LDO + 470 µF at the module. Don't power the radio from the XIAO's regulator or its 3V3 pad.</td></tr>
           <tr><td>Radio dead after first power-up</td><td><b>&gt;3.6 V killed it.</b> Confirm the LDO outputs 3.3 V and that no module pin ever saw 5V.</td></tr>
-          <tr><td>SD greyed out / boot odd</td><td>SD CS is on <span class="mono">D2 (G25)</span>, a strapping pin — fine as a deselected (high) CS, but don't pull it low at boot. Confirm the card's own CS pull and the <span class="mono">SD_CS 25</span> define.</td></tr>
+          <tr><td>Captures aren't saving</td><td>There's no SD on the C5 — the MonsterC5 streams to the <span class="mono">Tab5's internal microSD</span>. Check the Tab5 has a card inserted and mounted; the C5 side needs no SD wiring.</td></tr>
         </tbody>
       </table>
     </div>
