@@ -4,13 +4,12 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-/* ---- Dark-first, theme-aware tokens. Bare :root = dark (primary look). ---- */
 :root{
   --bg:#0b0f14; --panel:#131a22; --panel-2:#0f151c; --line:#22303f;
   --text:#e6edf3; --muted:#8a97a6; --faint:#5a6a79;
   --accent:#4dd0e1; --accent-soft:rgba(77,208,225,.14);
   --rf:#f5a623; --rf-soft:rgba(245,166,35,.14);
-  --green:#2ecc71; --red:#e74c3c; --blue:#5aa9e6;
+  --green:#2ecc71; --green-soft:rgba(46,204,113,.14); --red:#e74c3c; --blue:#5aa9e6;
   --shadow:0 1px 0 rgba(255,255,255,.02),0 8px 24px rgba(0,0,0,.35);
 }
 @media (prefers-color-scheme: light){
@@ -19,7 +18,7 @@
     --text:#14222f; --muted:#566673; --faint:#8a99a6;
     --accent:#0c7c8f; --accent-soft:rgba(12,124,143,.12);
     --rf:#b06a00; --rf-soft:rgba(176,106,0,.12);
-    --green:#1e8e4e; --red:#c0392b; --blue:#2f6fb0;
+    --green:#1e8e4e; --green-soft:rgba(30,142,78,.12); --red:#c0392b; --blue:#2f6fb0;
     --shadow:0 1px 2px rgba(20,34,47,.06),0 8px 24px rgba(20,34,47,.08);
   }
 }
@@ -28,62 +27,43 @@
   --text:#14222f; --muted:#566673; --faint:#8a99a6;
   --accent:#0c7c8f; --accent-soft:rgba(12,124,143,.12);
   --rf:#b06a00; --rf-soft:rgba(176,106,0,.12);
-  --green:#1e8e4e; --red:#c0392b; --blue:#2f6fb0;
+  --green:#1e8e4e; --green-soft:rgba(30,142,78,.12); --red:#c0392b; --blue:#2f6fb0;
   --shadow:0 1px 2px rgba(20,34,47,.06),0 8px 24px rgba(20,34,47,.08);
 }
-
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
-body{
-  margin:0;background:var(--bg);color:var(--text);
-  font:400 16px/1.6 "IBM Plex Sans",system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-  -webkit-font-smoothing:antialiased;
-}
+body{margin:0;background:var(--bg);color:var(--text);font:400 16px/1.6 "IBM Plex Sans",system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
 .mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-
-/* ---- Top bar ---- */
-.bar{
-  position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:16px;
-  padding:11px 20px;background:color-mix(in srgb,var(--bg) 82%,transparent);
-  backdrop-filter:blur(10px);border-bottom:1px solid var(--line);
-}
+.bar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:16px;padding:11px 20px;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
 .bar .brand{font-family:"IBM Plex Mono",monospace;font-weight:600;letter-spacing:.5px;font-size:15px;white-space:nowrap}
 .bar .brand b{color:var(--accent)}
 .bar .tag{color:var(--muted);font-size:12px;font-family:"IBM Plex Mono",monospace;border-left:1px solid var(--line);padding-left:16px}
 .bar nav{margin-left:auto;display:flex;gap:2px;flex-wrap:wrap}
 .bar nav a{color:var(--muted);text-decoration:none;font-size:13px;padding:5px 9px;border-radius:6px}
 .bar nav a:hover{color:var(--text);background:var(--accent-soft)}
-.tbtn{background:var(--panel);border:1px solid var(--line);color:var(--muted);border-radius:7px;
-  width:34px;height:30px;cursor:pointer;font-size:14px;display:grid;place-items:center}
+.tbtn{background:var(--panel);border:1px solid var(--line);color:var(--muted);border-radius:7px;width:34px;height:30px;cursor:pointer;font-size:14px;display:grid;place-items:center}
 .tbtn:hover{color:var(--text);border-color:var(--accent)}
 a:focus-visible,.tbtn:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
-
 .wrap{max-width:940px;margin:0 auto;padding:0 20px 88px}
-
-/* ---- Hero ---- */
 .hero{padding:52px 0 30px;border-bottom:1px solid var(--line)}
 .eyebrow{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:2.5px;text-transform:uppercase;color:var(--accent);margin:0 0 14px}
 .hero h1{font-size:clamp(30px,5.2vw,46px);line-height:1.05;margin:0 0 16px;font-weight:700;letter-spacing:-.5px;text-wrap:balance}
-.hero p{font-size:18px;color:var(--muted);max-width:60ch;margin:0}
+.hero p{font-size:18px;color:var(--muted);max-width:62ch;margin:0}
 .facts{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
 .fact{display:flex;flex-direction:column;gap:2px;padding:10px 14px;background:var(--panel);border:1px solid var(--line);border-radius:9px}
 .fact .k{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--faint)}
 .fact .v{font-weight:600;font-size:14px}
-
-/* ---- Sections ---- */
 section{padding:44px 0;border-bottom:1px solid var(--line)}
 section:last-of-type{border-bottom:0}
 .sec-h{display:flex;align-items:baseline;gap:14px;margin:0 0 6px}
 .sec-h .num{font-family:"IBM Plex Mono",monospace;color:var(--accent);font-size:14px;font-weight:600}
 h2{font-size:26px;margin:0;font-weight:700;letter-spacing:-.3px;text-wrap:balance}
-.sec-sub{color:var(--muted);margin:0 0 24px;max-width:65ch}
+.sec-sub{color:var(--muted);margin:0 0 24px;max-width:66ch}
 h3{font-size:16px;margin:26px 0 10px;font-weight:600;letter-spacing:.2px}
-p{max-width:70ch}
+p{max-width:72ch}
 a{color:var(--accent);text-decoration:none;border-bottom:1px solid transparent}
 a:hover{border-bottom-color:currentColor}
-
-/* ---- Cards / grid ---- */
 .grid{display:grid;gap:14px}
 .g2{grid-template-columns:repeat(2,1fr)}
 .g3{grid-template-columns:repeat(3,1fr)}
@@ -92,18 +72,10 @@ a:hover{border-bottom-color:currentColor}
 .card h4{margin:0 0 4px;font-size:15px}
 .card p{margin:0;color:var(--muted);font-size:14px}
 .card .price{font-family:"IBM Plex Mono",monospace;color:var(--accent);font-size:13px;float:right}
-
-/* ---- Chips ---- */
-.chips{display:flex;flex-wrap:wrap;gap:7px;margin:14px 0}
-.chip{font-family:"IBM Plex Mono",monospace;font-size:12px;padding:3px 10px;border-radius:20px;background:var(--panel-2);border:1px solid var(--line);color:var(--muted)}
-.chip b{color:var(--text);font-weight:600}
 .pin{color:var(--accent)}
-
-/* ---- Tables ---- */
 .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;margin:8px 0 4px}
 table{width:100%;border-collapse:collapse;font-size:14px;min-width:520px}
-caption{caption-side:top;text-align:left;font-family:"IBM Plex Mono",monospace;font-size:12px;
-  letter-spacing:1px;text-transform:uppercase;color:var(--faint);padding:12px 16px 0}
+caption{caption-side:top;text-align:left;font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--faint);padding:12px 16px 0}
 th,td{padding:10px 16px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
 th{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);font-weight:500;background:var(--panel-2)}
 tbody tr:last-child td{border-bottom:0}
@@ -111,54 +83,36 @@ td.mono,.num-col{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabu
 td .sig{color:var(--accent);font-weight:600}
 tr.pwr td .sig{color:var(--rf)}
 tr.rsv td .sig{color:var(--red)}
-tr.tap td{background:color-mix(in srgb,var(--green) 9%,transparent)}
+tr.tap td{background:var(--green-soft)}
 tr.tap td .sig{color:var(--green)}
-
-/* ---- Callouts ---- */
 .note{display:flex;gap:12px;padding:14px 16px;border-radius:11px;margin:16px 0;border:1px solid var(--line);background:var(--panel)}
 .note .ic{font-family:"IBM Plex Mono",monospace;font-weight:600;flex:none;width:20px;text-align:center}
 .note p{margin:0;font-size:14px;color:var(--muted);max-width:none}
+.note p+p{margin-top:8px}
 .note.warn{border-color:color-mix(in srgb,var(--rf) 55%,var(--line));background:var(--rf-soft)}
 .note.warn .ic{color:var(--rf)}
 .note.stop{border-color:color-mix(in srgb,var(--red) 55%,var(--line));background:color-mix(in srgb,var(--red) 10%,transparent)}
 .note.stop .ic{color:var(--red)}
 .note.info .ic{color:var(--accent)}
 .note b{color:var(--text)}
-
-/* ---- Code ---- */
-.code{background:#0c1117;border:1px solid #1d2732;border-radius:11px;padding:14px 16px;margin:12px 0;
-  overflow-x:auto;font-family:"IBM Plex Mono",monospace;font-size:13px;line-height:1.7;color:#cdd9e3}
-.code .c{color:#5f7285}
-.code .p{color:#4dd0e1}
-.code .s{color:#f5a623}
-.code .k{color:#8fd39a}
-
-/* ---- Steps ---- */
+.code{background:#0c1117;border:1px solid #1d2732;border-radius:11px;padding:14px 16px;margin:12px 0;overflow-x:auto;font-family:"IBM Plex Mono",monospace;font-size:13px;line-height:1.7;color:#cdd9e3}
+.code .c{color:#5f7285}.code .p{color:#4dd0e1}.code .s{color:#f5a623}.code .k{color:#8fd39a}
 .steps{display:grid;gap:14px;margin-top:8px}
 .step{display:grid;grid-template-columns:40px 1fr;gap:16px;align-items:start}
-.step .n{font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:15px;color:var(--accent);
-  border:1px solid var(--line);border-radius:9px;height:40px;display:grid;place-items:center;background:var(--panel)}
-.step .b h3{margin:6px 0 6px}
-.step .b p{margin:0 0 8px;color:var(--muted);font-size:14.5px}
-
-/* ---- Diagram ---- */
+.step .n{font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:15px;color:var(--accent);border:1px solid var(--line);border-radius:9px;height:40px;display:grid;place-items:center;background:var(--panel)}
+.step .b h3{margin:6px 0 6px}.step .b p{margin:0 0 8px;color:var(--muted);font-size:14.5px}
 figure{margin:8px 0 6px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px;box-shadow:var(--shadow)}
 figure svg{display:block;max-width:100%;height:auto}
-figcaption{color:var(--muted);font-size:13px;margin-top:10px;text-align:center}
+figcaption{color:var(--muted);font-size:13px;margin-top:10px;text-align:center;max-width:none}
 .legend{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:12px}
 .lg{display:inline-flex;align-items:center;gap:6px;font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:3px 9px;background:var(--panel-2)}
 .lg .sw{width:11px;height:11px;border-radius:3px;border:1px solid var(--line)}
 .lg .dot{width:9px;height:9px;border-radius:50%}
-.d-box{fill:var(--panel-2);stroke:var(--line);stroke-width:1.5}
-.d-inner{fill:var(--panel);stroke:var(--line);stroke-width:1.2}
-.d-title{fill:var(--text);font:600 14px "IBM Plex Sans",sans-serif}
-.d-sub{fill:var(--muted);font:11px "IBM Plex Mono",monospace}
-.d-pin{fill:var(--muted);font:11px "IBM Plex Mono",monospace}
-.w-uart{stroke:var(--accent);stroke-width:2;fill:none}
-.w-spi{stroke:var(--accent);stroke-width:2;fill:none}
-.w-pwr{stroke:var(--rf);stroke-width:2;fill:none;stroke-dasharray:5 4}
-.d-band{fill:var(--accent);font:600 11px "IBM Plex Mono",monospace}
-.d-band-rf{fill:var(--rf);font:600 11px "IBM Plex Mono",monospace}
+.d-t{fill:var(--text);font:600 13px "IBM Plex Sans",sans-serif}
+.d-s{fill:var(--muted);font:11px "IBM Plex Mono",monospace}
+.d-dim{fill:var(--accent);font:600 11px "IBM Plex Mono",monospace}
+.dimline{stroke:var(--accent);stroke-width:1}
+.board{fill:var(--panel-2);stroke:var(--line);stroke-width:1.5}
 .pin-n{fill:var(--faint);font:10px "IBM Plex Mono",monospace}
 .pad{stroke:var(--line);stroke-width:1.4}
 .pad-gnd{fill:var(--panel-2)}
@@ -169,24 +123,23 @@ figcaption{color:var(--muted);font-size:13px;margin-top:10px;text-align:center}
 .pad-unk{fill:var(--panel-2);stroke-dasharray:4 3}
 .pad-t{fill:var(--text);font:600 12px "IBM Plex Mono",monospace}
 .tap-mark{fill:var(--green)}
-
 footer{color:var(--muted);font-size:13px;padding:28px 0 0;text-align:center}
 footer .mono{color:var(--faint);font-size:12px}
-.kbd{font-family:"IBM Plex Mono",monospace;font-size:.85em;background:var(--panel-2);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+footer a{color:var(--faint)}
 ul.tight{margin:6px 0;padding-left:20px}
 ul.tight li{margin:4px 0;color:var(--muted);font-size:14.5px}
 ul.tight li b{color:var(--text)}
+.srcs{font-size:12.5px;color:var(--faint);line-height:1.7}
 </style>
 
 <div class="bar">
   <span class="brand">M5<b>MONSTER</b>C5</span>
-  <span class="tag">proto build · M-Bus</span>
+  <span class="tag">proto build · measured</span>
   <nav>
-    <a href="#idea">Idea</a>
-    <a href="#parts">Parts</a>
-    <a href="#tap">M-Bus tap</a>
-    <a href="#build">C5 build</a>
+    <a href="#overview">Overview</a>
+    <a href="#boards">Boards</a>
     <a href="#layout">Layout</a>
+    <a href="#wiring">Wiring</a>
     <a href="#flash">Flash</a>
     <a href="#fixes">Fixes</a>
   </nav>
@@ -196,307 +149,331 @@ ul.tight li b{color:var(--text)}
 <div class="wrap">
 
   <header class="hero">
-    <p class="eyebrow">ESP32-C5 · JanOS · M5-Bus · Proto</p>
+    <p class="eyebrow">ESP32-C5 · JanOS · M5-Bus · drawn to scale</p>
     <h1>Build the MonsterC5 on a Proto Module</h1>
-    <p>Take the same DIY MonsterC5 — an ESP32-C5 running JanOS, with a CC1101 or nRF24 radio, SD and GPS — and build it onto one or more M5Stack Proto Modules that seat on the Tab5's M-Bus. No dangling cable: the host link and power come straight off the connector, and the whole add-on rides on the back of the tablet.</p>
+    <p>The build from the <a href="https://claude.ai/artifact/1hEgnsJUiP3hQFLrGXQJDR">M5MonsterC5 Setup Guide</a> — an ESP32-C5 running JanOS with a CC1101 or nRF24 radio — soldered onto an M5Stack Module Proto that seats on the Tab5's M-Bus. The diagrams below are drawn to scale from measured part dimensions, so the placements are real, not cartoons.</p>
     <div class="facts">
-      <div class="fact"><span class="k">Host link</span><span class="v">M-Bus · UART0 115200</span></div>
-      <div class="fact"><span class="k">M-Bus tap</span><span class="v">5V · GND · G37 · G38</span></div>
+      <div class="fact"><span class="k">Proto board</span><span class="v">M5Stack M001 · 54.2 × 54.2 mm</span></div>
+      <div class="fact"><span class="k">Grid</span><span class="v">2.54 mm · 260 holes</span></div>
+      <div class="fact"><span class="k">Host link</span><span class="v">M-Bus UART0 · 4 nets</span></div>
       <div class="fact"><span class="k">Radio</span><span class="v">CC1101 / nRF24 on C5 SPI2</span></div>
-      <div class="fact"><span class="k">Logic</span><span class="v">3.3 V · one power source</span></div>
     </div>
   </header>
 
-  <!-- IDEA -->
-  <section id="idea">
-    <div class="sec-h"><span class="num">01</span><h2>The idea — and two pin domains</h2></div>
-    <p class="sec-sub">This is the build from the <a href="https://claude.ai/artifact/1hEgnsJUiP3hQFLrGXQJDR">M5MonsterC5 Setup Guide</a> — an ESP32-C5 running JanOS with a CC1101 or nRF24 radio, SD and GPS — laid onto an M5Stack Proto Module so it plugs into the Tab5's M-Bus instead of hanging off a loose cable. The wiring is identical to that guide; what's new here is the M-Bus tap and the proto layout. Keep two sets of pins straight — they are different chips.</p>
+  <div class="note warn" style="margin-top:28px"><span class="ic">!</span><div>
+    <p><b>Measure before you solder.</b> Every footprint below is from a first-party dimension drawing or datasheet (sources at the foot of the page), and the diagrams are drawn to those numbers. Three things are <b>not</b> confirmed and must be checked on your bench:</p>
+    <p>• <b>The M-Bus connector's pitch and exact position on the M001</b> — the 2.54 mm figure is the proto board's hole grid; the 2×15 M-Bus header is assumed to sit on that grid. • <b>Whether the M001 mechanically mates the Tab5's rear M-Bus</b> — the M001 is a Core-stack module; the Tab5 is a tablet. Confirm the connector seats before you rely on it. • <b>The Ebyte modules' exact pad maps</b> — their datasheet pad drawings are image-only; pad <em>pitch</em> (1.27 mm) and <em>size</em> are confirmed, individual pad positions are not.</p>
+  </div></div>
 
+  <!-- OVERVIEW -->
+  <section id="overview">
+    <div class="sec-h"><span class="num">01</span><h2>Two pin domains</h2></div>
+    <p class="sec-sub">Nothing about the wiring changes from the Setup Guide — it just moves onto a proto board. Keep two sets of pins straight, because they belong to different chips.</p>
     <div class="grid g2">
-      <div class="card"><span class="price">host side</span><h4>The M-Bus tap — 4 nets</h4><p>Everything the build takes from the Tab5: <b>5V</b>, <b>GND</b>, and the UART0 pair <span class="mono">G37/G38</span> (P4 pins). That is the entire interface to the tablet.</p></div>
-      <div class="card"><span class="price">board side</span><h4>The C5 build — on the proto board</h4><p>The radio header, SD and GPS all hang off the <b>ESP32-C5's own</b> GPIO (<span class="mono">G6/G8/G5/G3/G4</span>, etc.), wired on the Proto Module — never onto M-Bus pins.</p></div>
+      <div class="card"><span class="price">host side</span><h4>The M-Bus tap — 4 nets</h4><p>All the proto board takes from the Tab5: <b>5V</b>, <b>GND</b>, and the UART0 pair <span class="mono">G37/G38</span> (ESP32-P4 pins). That is the whole interface to the tablet.</p></div>
+      <div class="card"><span class="price">board side</span><h4>The C5 build — on the grid</h4><p>The radio, SD and GPS hang off the <b>ESP32-C5's own</b> GPIO (<span class="mono">G6/G8/G5/G3/G4</span>…), wired across the proto grid — never onto M-Bus pins.</p></div>
     </div>
+    <p>The C5's console UART0 (<span class="mono">G11 TX / G12 RX</span>) is the one net that bridges the two: it crosses to the M-Bus tap's <span class="mono">G37/G38</span>. Everything else on the board stays on the C5.</p>
+  </section>
+
+  <!-- BOARDS -->
+  <section id="boards">
+    <div class="sec-h"><span class="num">02</span><h2>Which C5 — and why size decides</h2></div>
+    <p class="sec-sub">The MonsterC5 needs an ESP32-<b>C5</b> (the only ESP32 with 2.4 <em>and</em> 5 GHz). Three ways to get one onto the 54.2 mm proto board — and their footprints are what make the choice.</p>
 
     <figure>
-      <svg viewBox="0 0 900 340" role="img" aria-label="The Tab5 M-Bus feeds a Proto Module with four nets: 5V, GND, and UART G37/G38. On the module sits the ESP32-C5, which drives a CC1101 or nRF24 radio header and an SD/GPS block over its own SPI2 and UART1.">
-        <!-- Tab5 -->
-        <rect class="d-box" x="24" y="96" width="150" height="150" rx="12"/>
-        <text class="d-title" x="99" y="150" text-anchor="middle">M5Stack Tab5</text>
-        <text class="d-sub" x="99" y="170" text-anchor="middle">M-Bus header</text>
-        <text class="d-sub" x="99" y="188" text-anchor="middle">ESP32-P4</text>
-        <!-- Proto module -->
-        <rect class="d-box" x="300" y="46" width="576" height="252" rx="14"/>
-        <text class="d-title" x="588" y="72" text-anchor="middle">M5Stack Proto Module(s)</text>
-        <!-- C5 inner -->
-        <rect class="d-inner" x="330" y="104" width="170" height="150" rx="10"/>
-        <text class="d-title" x="415" y="156" text-anchor="middle">ESP32-C5</text>
-        <text class="d-sub" x="415" y="176" text-anchor="middle">JanOS</text>
-        <text class="d-sub" x="415" y="194" text-anchor="middle">+ decoupling</text>
-        <!-- radio inner -->
-        <rect class="d-inner" x="690" y="92" width="162" height="94" rx="10"/>
-        <text class="d-title" x="771" y="130" text-anchor="middle">Radio header</text>
-        <text class="d-sub" x="771" y="150" text-anchor="middle">CC1101 / nRF24</text>
-        <text class="d-sub" x="771" y="168" text-anchor="middle">one at a time</text>
-        <!-- sd/gps inner -->
-        <rect class="d-inner" x="690" y="196" width="162" height="78" rx="10"/>
-        <text class="d-title" x="771" y="230" text-anchor="middle">microSD · GPS</text>
-        <text class="d-sub" x="771" y="250" text-anchor="middle">optional</text>
-
-        <!-- M-Bus tap arrows Tab5 -> C5 -->
-        <line class="w-pwr" x1="174" y1="140" x2="330" y2="140"/>
-        <polygon points="330,140 319,135 319,145" fill="var(--rf)"/>
-        <line class="w-uart" x1="174" y1="196" x2="330" y2="196"/>
-        <polygon points="330,196 319,191 319,201" fill="var(--accent)"/>
-        <polygon points="174,214 185,209 185,219" fill="var(--accent)"/>
-        <line class="w-uart" x1="174" y1="214" x2="330" y2="214"/>
-        <text class="d-band-rf" x="252" y="132" text-anchor="middle">5V · GND</text>
-        <text class="d-band" x="252" y="238" text-anchor="middle">UART0 · G37/G38</text>
-
-        <!-- C5 -> radio -->
-        <line class="w-spi" x1="500" y1="132" x2="690" y2="132"/>
-        <polygon points="690,132 679,127 679,137" fill="var(--accent)"/>
-        <text class="d-band" x="595" y="122" text-anchor="middle">SPI2 · G6/8/5 + G3/G4</text>
-        <!-- C5 -> sd/gps -->
-        <line class="w-spi" x1="500" y1="226" x2="690" y2="226"/>
-        <polygon points="690,226 679,221 679,231" fill="var(--accent)"/>
-        <text class="d-band" x="595" y="216" text-anchor="middle">SPI2 · CS G10 + UART1</text>
+      <svg viewBox="0 0 600 292" role="img" aria-label="Two M5Stack Module Proto boards drawn to the same scale, each 54.2 mm square. On the left a full ESP32-C5-DevKitC-1 at 53.6 by 25.4 mm nearly spans the board. On the right a XIAO ESP32-C5 at 21 by 17.8 mm sits in a corner, leaving room for an E07 CC1101 module beside it.">
+        <text class="d-t" x="152" y="40" text-anchor="middle">DevKitC-1 — fills the board</text>
+        <text class="d-t" x="448" y="40" text-anchor="middle">XIAO C5 — room to spare</text>
+        <!-- board 1 -->
+        <rect class="board" x="60" y="56" width="184" height="184" rx="6"/>
+        <rect x="61" y="113" width="182" height="86" rx="4" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+        <text class="d-s" x="152" y="150" text-anchor="middle" style="fill:var(--text);font-weight:600">ESP32-C5</text>
+        <text class="d-s" x="152" y="166" text-anchor="middle">DevKitC-1</text>
+        <text class="d-s" x="152" y="182" text-anchor="middle">53.6 × 25.4 mm</text>
+        <text class="d-s" x="152" y="262" text-anchor="middle">board 54.2 × 54.2 mm</text>
+        <!-- board 2 -->
+        <rect class="board" x="356" y="56" width="184" height="184" rx="6"/>
+        <rect x="368" y="66" width="71" height="60" rx="3" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+        <text class="d-s" x="403" y="92" text-anchor="middle" style="fill:var(--text);font-weight:600">XIAO C5</text>
+        <text class="d-s" x="403" y="108" text-anchor="middle">21×17.8</text>
+        <rect x="368" y="138" width="61" height="92" rx="3" fill="var(--rf-soft)" stroke="var(--rf)" stroke-width="1.5"/>
+        <text class="d-s" x="398" y="180" text-anchor="middle" style="fill:var(--text);font-weight:600">E07</text>
+        <text class="d-s" x="398" y="196" text-anchor="middle">CC1101</text>
+        <text class="d-s" x="398" y="212" text-anchor="middle">18×32</text>
+        <text class="d-s" x="448" y="262" text-anchor="middle">board 54.2 × 54.2 mm</text>
       </svg>
-      <figcaption>The M-Bus hands the module power and the serial link; the C5 does all the radio work on its own pins. Cross TX↔RX on the link, share one ground, pick one power source.</figcaption>
+      <figcaption>Both proto boards at one scale. A DevKitC-1 claims almost the entire board; a XIAO C5 and a full CC1101 module both fit on the right-hand board with grid left over.</figcaption>
     </figure>
-  </section>
-
-  <!-- PARTS -->
-  <section id="parts">
-    <div class="sec-h"><span class="num">02</span><h2>What you need</h2></div>
-    <div class="grid g2">
-      <div class="card"><span class="price">core</span><h4>ESP32-C5</h4><p>An ESP32-C5-DevKitC-1 (N8R8) is the easy route — onboard 5V→3V3 LDO, USB for flashing, and the RGB LED JanOS uses. A bare C5 module works if you add your own regulator.</p></div>
-      <div class="card"><span class="price">substrate</span><h4>M5Stack Proto Module ×1–2</h4><p>The perfboard that seats on the M-Bus. One module fits the C5 + radio; add a second for the SD/GPS and the PA/LNA power stage. Confirm it mechanically mates the Tab5's rear connector first.</p></div>
-      <div class="card"><span class="price">radio</span><h4>CC1101 or nRF24L01+PA/LNA</h4><p>E07-433M20S (CC1101) for sub-GHz, or E01-2G4M27SX (nRF24+PA/LNA) for 2.4 GHz. They share the header — fit one. 3.3 V only.</p></div>
-      <div class="card"><span class="price">optional</span><h4>microSD + GPS</h4><p>A 3.3 V SPI microSD breakout and an ATGM336H / M5 GPS for wardrive logging and location.</p></div>
-      <div class="card"><span class="price">power</span><h4>Decoupling + LDO</h4><p>100 nF + 10 µF + 100 µF per radio; for the PA/LNA, an AMS1117-3.3 / AP2112K (≥500 mA) off 5 V so the radio doesn't share the C5's LDO.</p></div>
-      <div class="card"><span class="price">glue</span><h4>Headers, sockets, wire</h4><p>A socket strip for the C5 and a 7-pin socket for the swappable radio, plus the M-Bus pass-through pins and hookup wire.</p></div>
-    </div>
-  </section>
-
-  <!-- TAP -->
-  <section id="tap">
-    <div class="sec-h"><span class="num">03</span><h2>The M-Bus tap</h2></div>
-    <p class="sec-sub">Solder to exactly four M-Bus nets. The link is UART0 — <b>cross TX↔RX</b>: the C5's TX lands on the host's RX. The full connector is below for reference; the four tapped pins are marked.</p>
 
     <div class="tbl-wrap">
       <table>
-        <caption>M-Bus → C5 · the only connections to the host</caption>
+        <caption>Measured footprints · all confirmed from first-party sources</caption>
+        <thead><tr><th>Part</th><th>Footprint</th><th>Pads / pitch</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>M5Stack Module Proto (M001)</td><td class="mono">54.2 × 54.2 × 12.8 mm</td><td class="mono">2.54 mm grid · 260 holes</td><td>carries the M-Bus 2×15</td></tr>
+          <tr><td>ESP32-C5-DevKitC-1</td><td class="mono">53.60 × 25.40 mm</td><td class="mono">2.54 mm · rows 22.86 mm</td><td>all stock JanOS pins broken out</td></tr>
+          <tr><td>XIAO ESP32-C5</td><td class="mono">21 × 17.8 mm</td><td class="mono">2×7 pads · 2.54 mm</td><td>dual-band; pin remap needed (below)</td></tr>
+          <tr><td>Ebyte E01-2G4M27SX (nRF24+PA/LNA)</td><td class="mono">18 × 14.5 mm</td><td class="mono">1.27 mm castellated · IPEX</td><td>SMD — not a 2.54 mm plug-in</td></tr>
+          <tr><td>Ebyte E07-433M20S (CC1101)</td><td class="mono">18 × 32 mm</td><td class="mono">1.27 mm stamp-hole</td><td>SMD — not a 2.54 mm plug-in</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>The three board options</h3>
+    <div class="grid g3">
+      <div class="card"><h4>MonsterC5 / DevKitC-1</h4><p>Stock JanOS runs unchanged — every radio/SD/GPS pin is on the header. But at 53.6 mm it fills the proto board; little grid left for the radio. Flash over the DevKitC's <b>UART</b> port.</p></div>
+      <div class="card"><h4>XIAO ESP32-C5</h4><p>21 mm, dual-band, $7. Fits with room for the radio — but needs a JanOS rebuild with remapped pins (see Wiring). Console <span class="mono">G11/G12</span> already lands on pads D6/D7.</p></div>
+      <div class="card"><h4>A bare C5 module</h4><p>Smallest, but you add your own 3V3 regulator and USB-UART for flashing. Only worth it if you're laying a custom board.</p></div>
+    </div>
+    <div class="note info"><span class="ic">i</span><p><b>Other ESP32s won't do the sub-GHz-less Wi-Fi job either way, but only the C5 is dual-band.</b> A XIAO ESP32-C3/C6/S3 is 2.4 GHz only and is not the MonsterC5 target. If you have a mix of boards, the XIAO <b>ESP32-C5</b> is the one that fits this build.</p></div>
+  </section>
+
+  <!-- LAYOUT -->
+  <section id="layout">
+    <div class="sec-h"><span class="num">03</span><h2>To-scale layout — XIAO build</h2></div>
+    <p class="sec-sub">The recommended compact build, drawn to scale on the M001's 2.54 mm grid: a XIAO ESP32-C5 and a CC1101 module, with the M-Bus 2×15 along the connector edge. Everything is to its measured size.</p>
+
+    <figure>
+      <svg viewBox="0 0 600 500" role="img" aria-label="Top view of the 54.2 mm square M5Stack Module Proto, to scale on a 2.54 mm grid. A XIAO ESP32-C5 of 21 by 17.8 mm sits upper-left, an E07 CC1101 module of 18 by 32 mm sits upper-right, and the M-Bus 2 by 15 connector runs along the lower edge with four pads marked as the tapped nets: GND, G38, G37 and 5V.">
+        <defs>
+          <pattern id="grid" width="17.78" height="17.78" patternUnits="userSpaceOnUse" patternTransform="translate(96,64)">
+            <path d="M17.78 0 H0 V17.78" fill="none" stroke="var(--line)" stroke-width="0.7"/>
+          </pattern>
+          <marker id="tk" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+        </defs>
+        <!-- board -->
+        <rect x="96" y="64" width="379" height="379" rx="6" fill="var(--panel-2)" stroke="var(--line)" stroke-width="1.5"/>
+        <rect x="96" y="64" width="379" height="379" rx="6" fill="url(#grid)"/>
+        <!-- top dimension -->
+        <line class="dimline" x1="96" y1="50" x2="475" y2="50" marker-start="url(#tk)" marker-end="url(#tk)"/>
+        <text class="d-dim" x="285" y="44" text-anchor="middle">54.2 mm</text>
+        <!-- left dimension -->
+        <line class="dimline" x1="82" y1="64" x2="82" y2="443" marker-start="url(#tk)" marker-end="url(#tk)"/>
+        <text class="d-dim" x="74" y="253" text-anchor="middle" transform="rotate(-90 74 253)">54.2 mm</text>
+        <!-- XIAO -->
+        <rect x="112" y="86" width="147" height="125" rx="4" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.6"/>
+        <g fill="var(--accent)"><rect x="120" y="83" width="7" height="5"/><rect x="140" y="83" width="7" height="5"/><rect x="160" y="83" width="7" height="5"/><rect x="180" y="83" width="7" height="5"/><rect x="200" y="83" width="7" height="5"/><rect x="220" y="83" width="7" height="5"/><rect x="240" y="83" width="7" height="5"/><rect x="120" y="209" width="7" height="5"/><rect x="140" y="209" width="7" height="5"/><rect x="160" y="209" width="7" height="5"/><rect x="180" y="209" width="7" height="5"/><rect x="200" y="209" width="7" height="5"/><rect x="220" y="209" width="7" height="5"/><rect x="240" y="209" width="7" height="5"/></g>
+        <text class="d-t" x="185" y="140" text-anchor="middle">XIAO ESP32-C5</text>
+        <text class="d-s" x="185" y="158" text-anchor="middle">21 × 17.8 mm</text>
+        <text class="d-s" x="185" y="176" text-anchor="middle">2×7 pads · 2.54 mm</text>
+        <!-- radio -->
+        <rect x="300" y="86" width="126" height="224" rx="4" fill="var(--rf-soft)" stroke="var(--rf)" stroke-width="1.6"/>
+        <text class="d-t" x="363" y="178" text-anchor="middle">E07 · CC1101</text>
+        <text class="d-s" x="363" y="196" text-anchor="middle">18 × 32 mm</text>
+        <text class="d-s" x="363" y="214" text-anchor="middle">1.27 mm pads</text>
+        <text class="d-s" x="363" y="238" text-anchor="middle" style="fill:var(--faint)">or E01 nRF24</text>
+        <text class="d-s" x="363" y="254" text-anchor="middle" style="fill:var(--faint)">18 × 14.5 mm</text>
+        <!-- M-Bus connector -->
+        <g>
+          <rect x="150" y="388" width="272" height="42" rx="5" fill="none" stroke="var(--line)" stroke-dasharray="4 3"/>
+          <!-- pads row top y=398, bottom y=416 ; 15 cols from x=161 step 17.78 -->
+          <g>
+            <circle class="tap-mark" cx="161" cy="398" r="5.2"/>
+            <circle class="pad pad-free" cx="178.8" cy="398" r="4.2"/><circle class="pad pad-free" cx="196.6" cy="398" r="4.2"/><circle class="pad pad-free" cx="214.3" cy="398" r="4.2"/><circle class="pad pad-free" cx="232.1" cy="398" r="4.2"/><circle class="pad pad-free" cx="249.9" cy="398" r="4.2"/>
+            <circle class="tap-mark" cx="267.7" cy="398" r="5.2"/>
+            <circle class="pad pad-free" cx="285.4" cy="398" r="4.2"/><circle class="pad pad-free" cx="303.2" cy="398" r="4.2"/><circle class="pad pad-free" cx="321" cy="398" r="4.2"/><circle class="pad pad-free" cx="338.8" cy="398" r="4.2"/><circle class="pad pad-free" cx="356.5" cy="398" r="4.2"/><circle class="pad pad-free" cx="374.3" cy="398" r="4.2"/><circle class="pad pad-free" cx="392.1" cy="398" r="4.2"/>
+            <circle class="tap-mark" cx="409.9" cy="398" r="5.2"/>
+          </g>
+          <g>
+            <circle class="pad pad-free" cx="161" cy="420" r="4.2"/><circle class="pad pad-free" cx="178.8" cy="420" r="4.2"/><circle class="pad pad-free" cx="196.6" cy="420" r="4.2"/><circle class="pad pad-free" cx="214.3" cy="420" r="4.2"/><circle class="pad pad-free" cx="232.1" cy="420" r="4.2"/><circle class="pad pad-free" cx="249.9" cy="420" r="4.2"/>
+            <circle class="tap-mark" cx="267.7" cy="420" r="5.2"/>
+            <circle class="pad pad-free" cx="285.4" cy="420" r="4.2"/><circle class="pad pad-free" cx="303.2" cy="420" r="4.2"/><circle class="pad pad-free" cx="321" cy="420" r="4.2"/><circle class="pad pad-free" cx="338.8" cy="420" r="4.2"/><circle class="pad pad-free" cx="356.5" cy="420" r="4.2"/><circle class="pad pad-free" cx="374.3" cy="420" r="4.2"/><circle class="pad pad-free" cx="392.1" cy="420" r="4.2"/><circle class="pad pad-free" cx="409.9" cy="420" r="4.2"/>
+          </g>
+          <text class="d-s" x="161" y="386" text-anchor="middle" style="fill:var(--green);font-weight:600">GND</text>
+          <text class="d-s" x="267.7" y="386" text-anchor="middle" style="fill:var(--green);font-weight:600">G38</text>
+          <text class="d-s" x="409.9" y="386" text-anchor="middle" style="fill:var(--green);font-weight:600">5V</text>
+          <text class="d-s" x="267.7" y="438" text-anchor="middle" style="fill:var(--green);font-weight:600">G37</text>
+        </g>
+        <text class="d-s" x="285" y="458" text-anchor="middle">M-Bus 2×15 — 4 tapped nets (full map in Wiring)</text>
+      </svg>
+      <div class="legend">
+        <span class="lg"><span class="sw" style="background:var(--accent-soft);border-color:var(--accent)"></span>XIAO ESP32-C5</span>
+        <span class="lg"><span class="sw" style="background:var(--rf-soft);border-color:var(--rf)"></span>radio module</span>
+        <span class="lg"><span class="dot" style="background:var(--green)"></span>tapped M-Bus net</span>
+      </div>
+      <figcaption>Scale ≈ 7 px/mm on the M001's 2.54 mm grid (260 holes). The four green pads are illustrative positions of the tapped nets — confirm pin 1 and the connector's real position on your board. The CC1101 can be swapped for an nRF24 (18 × 14.5 mm) in the same spot.</figcaption>
+    </figure>
+  </section>
+
+  <!-- WIRING -->
+  <section id="wiring">
+    <div class="sec-h"><span class="num">04</span><h2>Wiring</h2></div>
+
+    <h3>The M-Bus tap — four nets to the host</h3>
+    <p>Cross TX↔RX: the C5's TX lands on the host's RX. One shared ground. One power source.</p>
+    <div class="tbl-wrap">
+      <table>
+        <caption>M-Bus → C5 · 115200 8N1</caption>
         <thead><tr><th>Net</th><th>Tab5 M-Bus pin</th><th>→ ESP32-C5</th><th>Note</th></tr></thead>
         <tbody>
           <tr class="tap"><td><span class="sig">Host TX</span></td><td class="mono">pin 14 · TXD0 G37</td><td class="mono">G12 (U0RXD)</td><td>host transmit → board receive</td></tr>
           <tr class="tap"><td><span class="sig">Host RX</span></td><td class="mono">pin 13 · RXD0 G38</td><td class="mono">G11 (U0TXD)</td><td>board transmit → host receive (crossed)</td></tr>
           <tr class="tap"><td><span class="sig">GND</span></td><td class="mono">pin 1 / 3 / 5</td><td class="mono">GND</td><td>one shared ground — mandatory</td></tr>
-          <tr class="tap pwr"><td><span class="sig">5V</span></td><td class="mono">pin 28 · 5V</td><td class="mono">5V / VIN</td><td>switchable bus — see warning</td></tr>
+          <tr class="tap pwr"><td><span class="sig">5V</span></td><td class="mono">pin 28 · 5V</td><td class="mono">5V / VIN</td><td>switchable bus (EXT5V_EN) — may be off</td></tr>
         </tbody>
       </table>
     </div>
 
-    <div class="note warn"><span class="ic">!</span><p><b>The M-Bus 5V is switchable, and one power source only.</b> Pin 28 is the <span class="mono">EXT_5V_BUS</span>, gated by <span class="mono">EXT5V_EN</span> — it may be off until the Tab5 enables it. If the board won't power up, that's the first thing to check. And never feed the C5 from both the M-Bus 5V and its own USB at once — pick one.</p></div>
-
-    <figure>
-      <svg viewBox="0 0 760 712" role="img" aria-label="Tab5 M-Bus 2x15 connector reference. The four nets tapped for this build are marked: pin 1 GND, pin 13 RXD0 G38, pin 14 TXD0 G37, and pin 28 5V.">
-        <text class="d-title" x="380" y="34" text-anchor="middle">Tab5 M-Bus · 2×15</text>
-        <text class="d-sub" x="380" y="52" text-anchor="middle">● = tapped for this build · P4 GPIO</text>
-        <rect x="243" y="70" width="274" height="628" rx="12" fill="none" stroke="var(--line)" stroke-width="1.5"/>
-        <line x1="380" y1="74" x2="380" y2="694" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 4"/>
-
-        <!-- Row 1 -->
-        <text class="pin-n" x="236" y="96" text-anchor="end">1</text>
-        <circle class="tap-mark" cx="229" cy="92" r="4.5"/>
-        <rect class="pad pad-gnd" x="250" y="82" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="100" text-anchor="middle">GND</text>
-        <rect class="pad pad-free" x="386" y="82" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="100" text-anchor="middle">G16</text>
-        <text class="pin-n" x="524" y="96" text-anchor="start">2</text>
-        <!-- Row 2 -->
-        <text class="pin-n" x="236" y="136" text-anchor="end">3</text>
-        <rect class="pad pad-gnd" x="250" y="122" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="140" text-anchor="middle">GND</text>
-        <rect class="pad pad-unk" x="386" y="122" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="140" text-anchor="middle">PB_IN G17</text>
-        <text class="pin-n" x="524" y="136" text-anchor="start">4</text>
-        <!-- Row 3 -->
-        <text class="pin-n" x="236" y="176" text-anchor="end">5</text>
-        <rect class="pad pad-gnd" x="250" y="162" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="180" text-anchor="middle">GND</text>
-        <rect class="pad pad-rsv" x="386" y="162" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="180" text-anchor="middle">EN (RST)</text>
-        <text class="pin-n" x="524" y="176" text-anchor="start">6</text>
-        <!-- Row 4 -->
-        <text class="pin-n" x="236" y="216" text-anchor="end">7</text>
-        <rect class="pad pad-bus" x="250" y="202" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="220" text-anchor="middle">MOSI G18</text>
-        <rect class="pad pad-free" x="386" y="202" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="220" text-anchor="middle">G45</text>
-        <text class="pin-n" x="524" y="216" text-anchor="start">8</text>
-        <!-- Row 5 -->
-        <text class="pin-n" x="236" y="256" text-anchor="end">9</text>
-        <rect class="pad pad-bus" x="250" y="242" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="260" text-anchor="middle">MISO G19</text>
-        <rect class="pad pad-unk" x="386" y="242" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="260" text-anchor="middle">PB_OUT G52</text>
-        <text class="pin-n" x="524" y="256" text-anchor="start">10</text>
-        <!-- Row 6 -->
-        <text class="pin-n" x="236" y="296" text-anchor="end">11</text>
-        <rect class="pad pad-bus" x="250" y="282" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="300" text-anchor="middle">SCK G5</text>
-        <rect class="pad pad-pwr" x="386" y="282" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="300" text-anchor="middle">3V3</text>
-        <text class="pin-n" x="524" y="296" text-anchor="start">12</text>
-        <!-- Row 7 -->
-        <text class="pin-n" x="236" y="336" text-anchor="end">13</text>
-        <circle class="tap-mark" cx="229" cy="332" r="4.5"/>
-        <rect class="pad pad-bus" x="250" y="322" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="340" text-anchor="middle">RXD0 G38</text>
-        <rect class="pad pad-bus" x="386" y="322" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="340" text-anchor="middle">TXD0 G37</text>
-        <circle class="tap-mark" cx="531" cy="332" r="4.5"/>
-        <text class="pin-n" x="524" y="336" text-anchor="start">14</text>
-        <!-- Row 8 -->
-        <text class="pin-n" x="236" y="376" text-anchor="end">15</text>
-        <rect class="pad pad-unk" x="250" y="362" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="380" text-anchor="middle">PC_RX G7</text>
-        <rect class="pad pad-unk" x="386" y="362" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="380" text-anchor="middle">PC_TX G6</text>
-        <text class="pin-n" x="524" y="376" text-anchor="start">16</text>
-        <!-- Row 9 -->
-        <text class="pin-n" x="236" y="416" text-anchor="end">17</text>
-        <rect class="pad pad-bus" x="250" y="402" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="420" text-anchor="middle">SDA G31</text>
-        <rect class="pad pad-bus" x="386" y="402" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="420" text-anchor="middle">SCL G32</text>
-        <text class="pin-n" x="524" y="416" text-anchor="start">18</text>
-        <!-- Row 10 -->
-        <text class="pin-n" x="236" y="456" text-anchor="end">19</text>
-        <rect class="pad pad-free" x="250" y="442" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="460" text-anchor="middle">G3</text>
-        <rect class="pad pad-free" x="386" y="442" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="460" text-anchor="middle">G4</text>
-        <text class="pin-n" x="524" y="456" text-anchor="start">20</text>
-        <!-- Row 11 -->
-        <text class="pin-n" x="236" y="496" text-anchor="end">21</text>
-        <rect class="pad pad-free" x="250" y="482" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="500" text-anchor="middle">G2</text>
-        <rect class="pad pad-free" x="386" y="482" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="500" text-anchor="middle">G48</text>
-        <text class="pin-n" x="524" y="496" text-anchor="start">22</text>
-        <!-- Row 12 -->
-        <text class="pin-n" x="236" y="536" text-anchor="end">23</text>
-        <rect class="pad pad-free" x="250" y="522" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="540" text-anchor="middle">G47</text>
-        <rect class="pad pad-free" x="386" y="522" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="540" text-anchor="middle">G35</text>
-        <text class="pin-n" x="524" y="536" text-anchor="start">24</text>
-        <!-- Row 13 -->
-        <text class="pin-n" x="236" y="576" text-anchor="end">25</text>
-        <rect class="pad pad-unk" x="250" y="562" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="580" text-anchor="middle">HVIN</text>
-        <rect class="pad pad-free" x="386" y="562" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="580" text-anchor="middle">G51</text>
-        <text class="pin-n" x="524" y="576" text-anchor="start">26</text>
-        <!-- Row 14 -->
-        <text class="pin-n" x="236" y="616" text-anchor="end">27</text>
-        <rect class="pad pad-unk" x="250" y="602" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="620" text-anchor="middle">HVIN</text>
-        <rect class="pad pad-pwr" x="386" y="602" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="620" text-anchor="middle">5V</text>
-        <circle class="tap-mark" cx="531" cy="612" r="4.5"/>
-        <text class="pin-n" x="524" y="616" text-anchor="start">28</text>
-        <!-- Row 15 -->
-        <text class="pin-n" x="236" y="656" text-anchor="end">29</text>
-        <rect class="pad pad-unk" x="250" y="642" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="660" text-anchor="middle">HVIN</text>
-        <rect class="pad pad-pwr" x="386" y="642" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="660" text-anchor="middle">BAT</text>
-        <text class="pin-n" x="524" y="656" text-anchor="start">30</text>
-      </svg>
-      <div class="legend">
-        <span class="lg"><span class="dot" style="background:var(--green)"></span>tapped for this build</span>
-        <span class="lg"><span class="sw" style="background:var(--panel-2)"></span>GND</span>
-        <span class="lg"><span class="sw" style="background:var(--rf-soft);border-color:var(--rf)"></span>Power</span>
-        <span class="lg"><span class="sw" style="background:var(--accent-soft);border-color:var(--accent)"></span>Bus</span>
-        <span class="lg"><span class="sw" style="background:var(--panel)"></span>Free GPIO</span>
-        <span class="lg"><span class="sw" style="background:var(--panel-2);border-style:dashed"></span>Reserved / undocumented</span>
-      </div>
-      <figcaption>M-Bus pinout from the official M5Stack Tab5 page. Leave <span class="mono">EN</span> (pin 6) and the undocumented <span class="mono">HVIN</span> nets alone. The SPI/I²C/GPIO columns are the P4's own — not needed for this build, but handy if you also prototype directly on the host side.</figcaption>
-    </figure>
-  </section>
-
-  <!-- BUILD -->
-  <section id="build">
-    <div class="sec-h"><span class="num">04</span><h2>The C5-side build</h2></div>
-    <p class="sec-sub">Everything here is wired on the Proto Module between the C5 and its peripherals — all ESP32-C5 GPIO, all 3.3 V. These are the current firmware defaults; the radio and SD share one SPI2 bus, each with its own select.</p>
-
-    <h3>Swappable radio header (SPI2) — fit one radio</h3>
+    <h3>The radio on the C5's SPI2 — one radio at a time</h3>
+    <p>Stock JanOS pin map. The CC1101 and nRF24 share the chip-select and control pins, so only one is fitted at a time.</p>
     <div class="tbl-wrap">
       <table>
-        <caption>C5 → CC1101 / nRF24 · 3.3 V · one at a time</caption>
+        <caption>C5 → CC1101 / nRF24 · 3.3 V</caption>
         <thead><tr><th>C5 pin</th><th>CC1101</th><th>nRF24</th><th>Note</th></tr></thead>
         <tbody>
           <tr><td class="mono">GPIO6</td><td><span class="sig">SCK</span></td><td><span class="sig">SCK</span></td><td>SPI clock (shared with SD)</td></tr>
-          <tr><td class="mono">GPIO8</td><td><span class="sig">MOSI/SI</span></td><td><span class="sig">MOSI</span></td><td>host → radio (shared with SD)</td></tr>
-          <tr><td class="mono">GPIO5</td><td><span class="sig">MISO/SO</span></td><td><span class="sig">MISO</span></td><td>radio → host (shared with SD)</td></tr>
+          <tr><td class="mono">GPIO8</td><td><span class="sig">MOSI/SI</span></td><td><span class="sig">MOSI</span></td><td>host → radio</td></tr>
+          <tr><td class="mono">GPIO5</td><td><span class="sig">MISO/SO</span></td><td><span class="sig">MISO</span></td><td>radio → host</td></tr>
           <tr><td class="mono">GPIO3</td><td><span class="sig">CSN</span></td><td><span class="sig">CSN</span></td><td>chip-select — 10k pull-up</td></tr>
           <tr><td class="mono">GPIO4</td><td><span class="sig">GDO0</span></td><td><span class="sig">CE</span></td><td>control — 4.7k pull-down</td></tr>
-          <tr class="pwr"><td class="mono">3V3 · GND</td><td><span class="sig">VCC·GND</span></td><td><span class="sig">VCC·GND</span></td><td>3.3 V only — never 5 V</td></tr>
+          <tr class="pwr"><td class="mono">3V3 · GND</td><td><span class="sig">VCC·GND</span></td><td><span class="sig">VCC·GND</span></td><td>3.3 V only — <b>&gt;3.6 V kills both modules</b></td></tr>
         </tbody>
       </table>
     </div>
-    <p>Wire the 7-pin socket once; the CC1101 and the nRF24 both drop into it. Give <span class="mono">G3</span> a 10k pull-up and <span class="mono">G4</span> a 4.7k pull-down so the bus boots sane.</p>
+    <div class="note warn"><span class="ic">!</span><p><b>Your Ebyte modules are 1.27 mm SMD, not plug-ins.</b> The E01 (18 × 14.5 mm) and E07 (18 × 32 mm) have 1.27 mm castellated/stamp pads and an IPEX RF jack — they don't drop into the 2.54 mm grid. Hand-wire fine leads (30 AWG) to a patch of grid, or mount them on a 1.27→2.54 breakout. And decouple the nRF24+PA/LNA: <b>100 nF + 10 µF + 100 µF</b> at its pins, ideally its own 3V3 LDO off 5 V — see <a href="https://claude.ai/artifact/RgPE8E2JqgnbLeVjTSFcmy">Decouple the nRF24</a>.</p></div>
 
-    <div class="note warn"><span class="ic">!</span><p><b>Decouple the PA/LNA.</b> An nRF24+PA/LNA spikes to ~115 mA on TX and will sag the DevKitC's shared LDO. Fit <b>100 nF + 10 µF + 100 µF</b> at the module's VCC/GND pins and, on the second Proto Module, give it its own 3V3 LDO off the 5 V rail. Full detail in <a href="https://claude.ai/artifact/RgPE8E2JqgnbLeVjTSFcmy">Decouple the nRF24</a> and the <a href="https://claude.ai/artifact/8w24xS2Vjx8vRfS5Fawi2p">Swappable Radio Header</a>.</p></div>
-
-    <h3>microSD &amp; GPS (optional)</h3>
+    <h3>microSD &amp; GPS (optional, C5 pins)</h3>
     <div class="tbl-wrap">
       <table>
         <thead><tr><th>Peripheral</th><th>C5 pins</th><th>Note</th></tr></thead>
         <tbody>
           <tr><td>microSD (SPI2)</td><td class="mono">CLK G6 · MOSI G8 · MISO G5 · CS G10</td><td>same bus as the radio, own CS</td></tr>
           <tr><td>GPS (UART1)</td><td class="mono">TX G13 · RX G14</td><td>ATGM336H @9600 / M5 GPS @115200</td></tr>
-          <tr><td>NeoPixel · BOOT</td><td class="mono">LED G27 · BTN G28</td><td>onboard on the DevKitC — no wiring</td></tr>
         </tbody>
       </table>
     </div>
-    <p>The board's console is UART0 on <span class="mono">G11 (TX)</span> / <span class="mono">G12 (RX)</span> — that pair is what crosses to the M-Bus tap above.</p>
-  </section>
 
-  <!-- LAYOUT -->
-  <section id="layout">
-    <div class="sec-h"><span class="num">05</span><h2>One module, or two</h2></div>
-    <p class="sec-sub">"One or more" is a real choice: a single module is compact; splitting onto two keeps the hot PA/LNA power stage away from the digital bus and gives you room for the LDO and bulk caps.</p>
-    <div class="grid g2">
-      <div class="card"><h4>Single module</h4><p>C5 + the 7-pin radio socket + the M-Bus pass-through. Tight, but fine for a bare CC1101 or a decoupled bare nRF24. SD/GPS only if there's room.</p></div>
-      <div class="card"><h4>Two modules (stacked)</h4><p><b>Lower:</b> C5, M-Bus tap, SD, GPS. <b>Upper:</b> the radio socket, its decoupling stack and a dedicated 3V3 LDO off 5 V. Both share the tapped rails through the M-Bus pass-through pins.</p></div>
+    <h3>If you use a XIAO ESP32-C5 — the pin remap</h3>
+    <p>The XIAO exposes a different subset of GPIO than the DevKitC. Its console <span class="mono">G11/G12</span> lands on pads D6/D7, so the M-Bus tap works as-is — but JanOS's stock radio/SD pins (<span class="mono">G6/G5/G3/G4/G13/G14</span>) are <b>not on the XIAO's pads</b>. For the Wi-Fi/BLE suite you need nothing more than the tap. To add the radio or SD you must rebuild JanOS with the pins remapped to pads the XIAO actually breaks out.</p>
+    <div class="tbl-wrap">
+      <table>
+        <caption>JanOS signal → stock C5 pin → XIAO pad to rebuild against</caption>
+        <thead><tr><th>JanOS signal</th><th>Stock C5</th><th>On a XIAO, remap to</th></tr></thead>
+        <tbody>
+          <tr class="tap"><td>Console TX / RX</td><td class="mono">G11 / G12</td><td class="mono">D6 / D7 (G11 / G12) — unchanged</td></tr>
+          <tr><td>SPI SCK</td><td class="mono">G6</td><td class="mono">D8 → G8</td></tr>
+          <tr><td>SPI MOSI</td><td class="mono">G8</td><td class="mono">D10 → G10</td></tr>
+          <tr><td>SPI MISO</td><td class="mono">G5</td><td class="mono">D9 → G9</td></tr>
+          <tr><td>Radio CSN</td><td class="mono">G3</td><td class="mono">D0 → G1</td></tr>
+          <tr><td>Radio control (GDO0 / CE)</td><td class="mono">G4</td><td class="mono">D1 → G0</td></tr>
+          <tr><td>SD CS</td><td class="mono">G10</td><td class="mono">D2 → G25</td></tr>
+        </tbody>
+      </table>
     </div>
-    <div class="note info"><span class="ic">i</span><p><b>Stacking shares everything.</b> Modules on the M-Bus pass the same nets straight through. The only lines in play for this build are the four you tapped — the radio/SD bus stays on the C5 and never touches the M-Bus, so a second module just needs the 5 V and GND it carries up.</p></div>
+    <p>Change the defaults in <span class="mono">components/cc1101/include/cc1101.h</span>, <span class="mono">components/nrf24_jammer/nrf24_jammer.c</span>, and the SD/GPS defines, then rebuild for <span class="mono">esp32c5</span>. Console and Wi-Fi need no change.</p>
+
+    <h3>The M-Bus pinout, in full</h3>
+    <p>From the official M5Stack Tab5 page. The four tapped nets are marked. Leave <span class="mono">EN</span> (pin 6) and the undocumented <span class="mono">HVIN</span> nets alone.</p>
+    <figure>
+      <svg viewBox="0 0 760 712" role="img" aria-label="Tab5 M-Bus 2x15 connector. The four tapped nets are marked: pin 1 GND, pin 13 RXD0 G38, pin 14 TXD0 G37, and pin 28 5V.">
+        <text class="d-t" x="380" y="34" text-anchor="middle">Tab5 M-Bus · 2×15</text>
+        <text class="d-s" x="380" y="52" text-anchor="middle">● = tapped · odd left · even right · P4 GPIO</text>
+        <rect x="243" y="70" width="274" height="628" rx="12" fill="none" stroke="var(--line)" stroke-width="1.5"/>
+        <line x1="380" y1="74" x2="380" y2="694" stroke="var(--line)" stroke-width="1" stroke-dasharray="3 4"/>
+        <text class="pin-n" x="236" y="96" text-anchor="end">1</text><circle class="tap-mark" cx="229" cy="92" r="4.5"/>
+        <rect class="pad pad-gnd" x="250" y="82" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="100" text-anchor="middle">GND</text>
+        <rect class="pad pad-free" x="386" y="82" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="100" text-anchor="middle">G16</text><text class="pin-n" x="524" y="96" text-anchor="start">2</text>
+        <text class="pin-n" x="236" y="136" text-anchor="end">3</text>
+        <rect class="pad pad-gnd" x="250" y="122" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="140" text-anchor="middle">GND</text>
+        <rect class="pad pad-unk" x="386" y="122" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="140" text-anchor="middle">PB_IN G17</text><text class="pin-n" x="524" y="136" text-anchor="start">4</text>
+        <text class="pin-n" x="236" y="176" text-anchor="end">5</text>
+        <rect class="pad pad-gnd" x="250" y="162" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="180" text-anchor="middle">GND</text>
+        <rect class="pad pad-rsv" x="386" y="162" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="180" text-anchor="middle">EN (RST)</text><text class="pin-n" x="524" y="176" text-anchor="start">6</text>
+        <text class="pin-n" x="236" y="216" text-anchor="end">7</text>
+        <rect class="pad pad-bus" x="250" y="202" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="220" text-anchor="middle">MOSI G18</text>
+        <rect class="pad pad-free" x="386" y="202" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="220" text-anchor="middle">G45</text><text class="pin-n" x="524" y="216" text-anchor="start">8</text>
+        <text class="pin-n" x="236" y="256" text-anchor="end">9</text>
+        <rect class="pad pad-bus" x="250" y="242" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="260" text-anchor="middle">MISO G19</text>
+        <rect class="pad pad-unk" x="386" y="242" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="260" text-anchor="middle">PB_OUT G52</text><text class="pin-n" x="524" y="256" text-anchor="start">10</text>
+        <text class="pin-n" x="236" y="296" text-anchor="end">11</text>
+        <rect class="pad pad-bus" x="250" y="282" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="300" text-anchor="middle">SCK G5</text>
+        <rect class="pad pad-pwr" x="386" y="282" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="300" text-anchor="middle">3V3</text><text class="pin-n" x="524" y="296" text-anchor="start">12</text>
+        <text class="pin-n" x="236" y="336" text-anchor="end">13</text><circle class="tap-mark" cx="229" cy="332" r="4.5"/>
+        <rect class="pad pad-bus" x="250" y="322" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="340" text-anchor="middle">RXD0 G38</text>
+        <rect class="pad pad-bus" x="386" y="322" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="340" text-anchor="middle">TXD0 G37</text><circle class="tap-mark" cx="531" cy="332" r="4.5"/><text class="pin-n" x="524" y="336" text-anchor="start">14</text>
+        <text class="pin-n" x="236" y="376" text-anchor="end">15</text>
+        <rect class="pad pad-unk" x="250" y="362" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="380" text-anchor="middle">PC_RX G7</text>
+        <rect class="pad pad-unk" x="386" y="362" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="380" text-anchor="middle">PC_TX G6</text><text class="pin-n" x="524" y="376" text-anchor="start">16</text>
+        <text class="pin-n" x="236" y="416" text-anchor="end">17</text>
+        <rect class="pad pad-bus" x="250" y="402" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="420" text-anchor="middle">SDA G31</text>
+        <rect class="pad pad-bus" x="386" y="402" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="420" text-anchor="middle">SCL G32</text><text class="pin-n" x="524" y="416" text-anchor="start">18</text>
+        <text class="pin-n" x="236" y="456" text-anchor="end">19</text>
+        <rect class="pad pad-free" x="250" y="442" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="460" text-anchor="middle">G3</text>
+        <rect class="pad pad-free" x="386" y="442" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="460" text-anchor="middle">G4</text><text class="pin-n" x="524" y="456" text-anchor="start">20</text>
+        <text class="pin-n" x="236" y="496" text-anchor="end">21</text>
+        <rect class="pad pad-free" x="250" y="482" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="500" text-anchor="middle">G2</text>
+        <rect class="pad pad-free" x="386" y="482" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="500" text-anchor="middle">G48</text><text class="pin-n" x="524" y="496" text-anchor="start">22</text>
+        <text class="pin-n" x="236" y="536" text-anchor="end">23</text>
+        <rect class="pad pad-free" x="250" y="522" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="540" text-anchor="middle">G47</text>
+        <rect class="pad pad-free" x="386" y="522" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="540" text-anchor="middle">G35</text><text class="pin-n" x="524" y="536" text-anchor="start">24</text>
+        <text class="pin-n" x="236" y="576" text-anchor="end">25</text>
+        <rect class="pad pad-unk" x="250" y="562" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="580" text-anchor="middle">HVIN</text>
+        <rect class="pad pad-free" x="386" y="562" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="580" text-anchor="middle">G51</text><text class="pin-n" x="524" y="576" text-anchor="start">26</text>
+        <text class="pin-n" x="236" y="616" text-anchor="end">27</text>
+        <rect class="pad pad-unk" x="250" y="602" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="620" text-anchor="middle">HVIN</text>
+        <rect class="pad pad-pwr" x="386" y="602" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="620" text-anchor="middle">5V</text><circle class="tap-mark" cx="531" cy="612" r="4.5"/><text class="pin-n" x="524" y="616" text-anchor="start">28</text>
+        <text class="pin-n" x="236" y="656" text-anchor="end">29</text>
+        <rect class="pad pad-unk" x="250" y="642" width="124" height="28" rx="6"/><text class="pad-t" x="312" y="660" text-anchor="middle">HVIN</text>
+        <rect class="pad pad-pwr" x="386" y="642" width="124" height="28" rx="6"/><text class="pad-t" x="448" y="660" text-anchor="middle">BAT</text><text class="pin-n" x="524" y="656" text-anchor="start">30</text>
+      </svg>
+      <div class="legend">
+        <span class="lg"><span class="dot" style="background:var(--green)"></span>tapped</span>
+        <span class="lg"><span class="sw" style="background:var(--panel-2)"></span>GND</span>
+        <span class="lg"><span class="sw" style="background:var(--rf-soft);border-color:var(--rf)"></span>Power</span>
+        <span class="lg"><span class="sw" style="background:var(--accent-soft);border-color:var(--accent)"></span>Bus</span>
+        <span class="lg"><span class="sw" style="background:var(--panel)"></span>Free GPIO</span>
+        <span class="lg"><span class="sw" style="background:var(--panel-2);border-style:dashed"></span>Reserved / undocumented</span>
+      </div>
+      <figcaption>M-Bus pinout per the official M5Stack Tab5 page. These are ESP32-P4 pins — don't confuse M-Bus <span class="mono">G3/G4</span> with the C5 radio header's <span class="mono">G3/G4</span>.</figcaption>
+    </figure>
+
+    <div class="note stop"><span class="ic">✕</span><p><b>One power source, and keep clear of EN/HVIN.</b> Never feed the C5 from the M-Bus 5V and its own USB at once. A stray short to <span class="mono">EN</span> (pin 6) reboots the Tab5; the <span class="mono">HVIN</span> nets (25/27/29) are undocumented — leave them open.</p></div>
   </section>
 
   <!-- FLASH -->
   <section id="flash">
-    <div class="sec-h"><span class="num">06</span><h2>Flash, seat, verify</h2></div>
+    <div class="sec-h"><span class="num">05</span><h2>Flash, seat, verify</h2></div>
     <div class="steps">
-      <div class="step"><div class="n">1</div><div class="b"><h3>Flash the C5 first, off the module</h3><p>Flash JanOS onto the C5 and prove it on a serial monitor before it goes on the Proto Module (on a DevKitC, use the <b>UART</b> USB-C port, not the native USB port). Web flasher at <span class="mono">c5lab.github.io/projectZero</span>, or esptool — the full flash flow and offsets are in the <a href="https://claude.ai/artifact/1hEgnsJUiP3hQFLrGXQJDR">M5MonsterC5 Setup Guide</a>.</p></div></div>
-      <div class="step"><div class="n">2</div><div class="b"><h3>Flash the Tab5 app</h3><p>ESP32-P4 image via <span class="mono">c5lab.github.io/M5MonsterC5-Tab5</span> or esptool (bootloader 0x2000, partitions 0x8000, app 0x10000).</p></div></div>
-      <div class="step"><div class="n">3</div><div class="b"><h3>Seat on the M-Bus and boot</h3><p>Mount the module, boot the Tab5. It probes M-Bus/Grove/USB, finds the C5 on UART0, and raises <b>MONSTER DETECTED</b>. A quick <span class="mono">ping → pong</span> is the pass/fail.</p></div></div>
+      <div class="step"><div class="n">1</div><div class="b"><h3>Flash the C5 first, off the board</h3><p>Flash JanOS and prove it on a serial monitor before it goes on the proto board. On a DevKitC use the <b>UART</b> USB-C port (not native USB); on a XIAO, rebuild with the remapped pins first if you want the radio. Full flash flow and offsets are in the <a href="https://claude.ai/artifact/1hEgnsJUiP3hQFLrGXQJDR">M5MonsterC5 Setup Guide</a>.</p></div></div>
+      <div class="step"><div class="n">2</div><div class="b"><h3>Flash the Tab5 app</h3><p>ESP32-P4 image — web flasher or esptool (bootloader 0x2000, partitions 0x8000, app 0x10000). Again, see the Setup Guide.</p></div></div>
+      <div class="step"><div class="n">3</div><div class="b"><h3>Seat on the M-Bus and boot</h3><p>Mount the proto module, boot the Tab5. It probes M-Bus/Grove/USB, finds the C5 on UART0, and raises <b>MONSTER DETECTED</b>.</p></div></div>
     </div>
-    <div class="note warn"><span class="ic">!</span><p><b>Version &amp; one link.</b> The Tab5 app wants JanOS <b>1.7.6 or newer</b> (a mismatch is a warning, not a wall). And pick a single link — M-Bus <em>or</em> Grove <em>or</em> the UART USB port; all three land on the same UART0, so wiring two fights on the bus.</p></div>
+    <div class="note warn"><span class="ic">!</span><p><b>Version &amp; one link.</b> The Tab5 app wants JanOS <b>1.7.6 or newer</b> (a mismatch is a warning, not a wall). Pick a single link — M-Bus <em>or</em> Grove <em>or</em> the UART USB port; all three land on the same UART0.</p></div>
   </section>
 
   <!-- FIXES -->
   <section id="fixes">
-    <div class="sec-h"><span class="num">07</span><h2>If something's off</h2></div>
+    <div class="sec-h"><span class="num">06</span><h2>If something's off</h2></div>
     <div class="tbl-wrap">
       <table>
         <caption>Symptom → check</caption>
         <thead><tr><th>Symptom</th><th>Likely cause / fix</th></tr></thead>
         <tbody>
-          <tr><td>Board never powers up</td><td>M-Bus 5V (pin 28) is the switchable EXT_5V_BUS and may be off — power the C5 from its USB to confirm, or enable the bus.</td></tr>
-          <tr><td>Tab5 shows no Monster</td><td>TX/RX not crossed — C5 G11→M-Bus G38 (pin 13), C5 G12→M-Bus G37 (pin 14); confirm common GND; make sure only one link is wired.</td></tr>
-          <tr><td>"firmware too old/wrong"</td><td>C5 is below JanOS 1.7.6 — reflash the C5.</td></tr>
-          <tr><td>Radio badge NOT DETECTED</td><td>Check 3V3 (not 5V), CSN=G3 (10k↑), control=G4 (4.7k↓), bus G6/G8/G5, and that only one radio is in the socket.</td></tr>
-          <tr><td>nRF24 drops on TX</td><td>PA/LNA brownout — add the 100 µF bulk cap and the dedicated 3V3 LDO on the second module.</td></tr>
-          <tr><td>Reboots when you touch the module</td><td>A stray short to M-Bus EN (pin 6) resets the P4. Keep your wiring clear of pins 6 and the HVIN pins (25/27/29).</td></tr>
+          <tr><td>Module won't fit the Tab5 back</td><td>The M001 is a Core-stack module — confirm it mates the Tab5's M-Bus before building. If not, tap the four nets with wires instead of seating the connector.</td></tr>
+          <tr><td>Board never powers up</td><td>M-Bus 5V (pin 28) is switchable and may be off — power the C5 from its USB to confirm, or enable the bus.</td></tr>
+          <tr><td>Tab5 shows no Monster</td><td>TX/RX not crossed — C5 G11→M-Bus G38 (pin 13), C5 G12→M-Bus G37 (pin 14); confirm common GND; only one link wired.</td></tr>
+          <tr><td>XIAO: radio never detected</td><td>Stock JanOS pins aren't on XIAO pads — you must rebuild with the remap table above. Wi-Fi works without it.</td></tr>
+          <tr><td>Radio dead / erratic</td><td>3V3 only — <b>&gt;3.6 V permanently damages the E01/E07</b>. Check CSN=G3 (10k↑), control=G4 (4.7k↓), and the PA/LNA decoupling.</td></tr>
+          <tr><td>Reboots when you touch the board</td><td>A short to M-Bus EN (pin 6) resets the P4. Keep wiring clear of pins 6 and the HVIN pins (25/27/29).</td></tr>
         </tbody>
       </table>
     </div>
   </section>
 
   <footer>
-    <p>MonsterC5 on M5Stack Proto Modules · ESP32-C5 JanOS · M5Stack Tab5 M-Bus</p>
-    <p class="mono">Companion: M5MonsterC5 Setup Guide · M-Bus pinout per docs.m5stack.com/en/core/Tab5</p>
+    <p>MonsterC5 on an M5Stack Module Proto · ESP32-C5 JanOS · M5Stack Tab5 M-Bus</p>
+    <p class="srcs">Measured from: M5Stack Module Proto M001 (<a href="https://docs.m5stack.com/en/module/proto">docs.m5stack.com/en/module/proto</a>) · ESP32-C5-DevKitC-1 dimension drawing v1.2 (Espressif) · XIAO ESP32-C5 (<a href="https://wiki.seeedstudio.com/xiao_esp32c5_getting_started/">wiki.seeedstudio.com</a>) · Ebyte E01-2G4M27SX &amp; E07-433M20S datasheets (cdebyte.com) · Tab5 M-Bus pinout (<a href="https://docs.m5stack.com/en/core/Tab5">docs.m5stack.com/en/core/Tab5</a>). Companion: <a href="https://claude.ai/artifact/1hEgnsJUiP3hQFLrGXQJDR">M5MonsterC5 Setup Guide</a>.</p>
   </footer>
 </div>
 
 <script>
 (function(){
   var root=document.documentElement, btn=document.getElementById('themeBtn');
-  function cur(){
-    var t=null; try{t=localStorage.getItem('m5m-theme');}catch(e){}
-    if(t) return t;
-    return matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';
-  }
-  function apply(t){ root.setAttribute('data-theme',t); btn.textContent = t==='light'?'☀':'☾'; }
+  function cur(){var t=null;try{t=localStorage.getItem('m5m-theme');}catch(e){}if(t)return t;return matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}
+  function apply(t){root.setAttribute('data-theme',t);btn.textContent=t==='light'?'☀':'☾';}
   apply(cur());
-  btn.addEventListener('click',function(){
-    var next = root.getAttribute('data-theme')==='light'?'dark':'light';
-    apply(next);
-    try{localStorage.setItem('m5m-theme',next);}catch(e){}
-  });
+  btn.addEventListener('click',function(){var next=root.getAttribute('data-theme')==='light'?'dark':'light';apply(next);try{localStorage.setItem('m5m-theme',next);}catch(e){}});
 })();
 </script>
 
