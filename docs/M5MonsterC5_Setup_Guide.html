@@ -159,6 +159,18 @@ footer .mono{color:var(--faint);font-size:12px}
 ul.tight{margin:6px 0;padding-left:20px}
 ul.tight li{margin:4px 0;color:var(--muted);font-size:14.5px}
 ul.tight li b{color:var(--text)}
+
+/* ---- Point-to-point harness helpers (shared look with the proto guides) ---- */
+.board{fill:var(--panel-2);stroke:var(--line);stroke-width:1.5}
+.term{fill:var(--panel);stroke:var(--text);stroke-width:1.5}
+.lead{fill:none;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}
+.jx{stroke:none}
+.pad-t{fill:var(--text);font:600 12px "IBM Plex Mono",monospace}
+.d-xs{fill:var(--muted);font:9.5px "IBM Plex Mono",monospace}
+.legend{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:12px}
+.lg{display:inline-flex;align-items:center;gap:6px;font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:20px;padding:3px 9px;background:var(--panel-2)}
+.lg .wire{width:16px;height:3px;border-radius:2px}
+.wsw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px;margin-right:7px;border:1px solid rgba(0,0,0,.25)}
 </style>
 
 <div class="bar">
@@ -262,74 +274,96 @@ ul.tight li b{color:var(--text)}
     <div class="sec-h"><span class="num">03</span><h2>Wiring</h2></div>
     <p class="sec-sub">Two harnesses: a 4-wire UART from the Tab5 to the C5, and one 3.3 V radio on the C5's SPI2 bus (the same bus the SD card uses — each device just gets its own chip-select). The CC1101 and the nRF24 land on the <b>same swappable header</b>: identical SCK/MOSI/MISO, and they share the chip-select (<span class="mono">G3</span>) and control pin (<span class="mono">G4</span>). Fit one radio at a time. All logic is 3.3 V.</p>
 
+    <h3>Harness A — the C5 to the Tab5 (4 wires)</h3>
     <figure>
-      <svg viewBox="0 0 900 470" role="img" aria-label="Detailed pin harness. Tab5 M5Bus TX GPIO37 to C5 RX GPIO12, Tab5 RX GPIO38 to C5 TX GPIO11, grounds common, 5 volts to the C5. The radio header shares C5 SPI2: SCK GPIO6, MOSI GPIO8, MISO GPIO5, plus CSN GPIO3 and the control pin GPIO4, and 3.3 volts and ground.">
-        <!-- Tab5 -->
-        <rect class="d-box" x="24" y="40" width="150" height="360" rx="12"/>
-        <text class="d-title" x="99" y="68" text-anchor="middle">Tab5</text>
-        <text class="d-sub" x="99" y="86" text-anchor="middle">M5Bus (default)</text>
-        <!-- C5 -->
-        <rect class="d-box" x="375" y="40" width="150" height="360" rx="12"/>
-        <text class="d-title" x="450" y="68" text-anchor="middle">ESP32-C5</text>
-        <text class="d-sub" x="450" y="86" text-anchor="middle">JanOS</text>
-        <!-- Radio header -->
-        <rect class="d-box" x="726" y="150" width="150" height="260" rx="12"/>
-        <text class="d-title" x="801" y="178" text-anchor="middle">Radio</text>
-        <text class="d-sub" x="801" y="196" text-anchor="middle">CC1101 / nRF24</text>
-
-        <!-- Tab5 <-> C5 UART harness (4 rows) -->
-        <!-- TX->RX -->
-        <text class="d-pin" x="166" y="128" text-anchor="end">G37 TX</text>
-        <line class="w-uart" x1="174" y1="124" x2="375" y2="124"/>
-        <polygon points="375,124 364,119 364,129" fill="var(--accent)"/>
-        <text class="d-pin" x="383" y="128" text-anchor="start">G12 RX</text>
-        <!-- RX<-TX -->
-        <text class="d-pin" x="166" y="160" text-anchor="end">G38 RX</text>
-        <line class="w-uart" x1="174" y1="156" x2="375" y2="156"/>
-        <polygon points="174,156 185,151 185,161" fill="var(--accent)"/>
-        <text class="d-pin" x="383" y="160" text-anchor="start">G11 TX</text>
-        <!-- GND -->
-        <text class="d-pin" x="166" y="192" text-anchor="end">GND</text>
-        <line class="w-uart" x1="174" y1="188" x2="375" y2="188" stroke="var(--muted)"/>
-        <text class="d-pin" x="383" y="192" text-anchor="start">GND</text>
-        <!-- 5V -->
-        <text class="d-pin" x="166" y="224" text-anchor="end">5V</text>
-        <line class="w-pwr" x1="174" y1="220" x2="375" y2="220"/>
-        <polygon points="375,220 364,215 364,225" fill="var(--rf)"/>
-        <text class="d-pin" x="383" y="224" text-anchor="start">5V in</text>
-        <text class="d-band" x="274" y="108" text-anchor="middle">UART · cross TX/RX</text>
-
-        <!-- C5 <-> radio SPI harness -->
-        <!-- SCK -->
-        <text class="d-pin" x="517" y="212" text-anchor="end">G6</text>
-        <line class="w-spi" x1="525" y1="208" x2="726" y2="208"/>
-        <text class="d-sig" x="734" y="212" text-anchor="start">SCK</text>
-        <!-- MOSI -->
-        <text class="d-pin" x="517" y="240" text-anchor="end">G8</text>
-        <line class="w-spi" x1="525" y1="236" x2="726" y2="236"/>
-        <polygon points="726,236 715,231 715,241" fill="var(--accent)"/>
-        <text class="d-sig" x="734" y="240" text-anchor="start">MOSI / SI</text>
-        <!-- MISO -->
-        <text class="d-pin" x="517" y="268" text-anchor="end">G5</text>
-        <line class="w-spi" x1="525" y1="264" x2="726" y2="264"/>
-        <polygon points="525,264 536,259 536,269" fill="var(--accent)"/>
-        <text class="d-sig" x="734" y="268" text-anchor="start">MISO / SO</text>
-        <!-- CS -->
-        <text class="d-pin" x="517" y="296" text-anchor="end">G3</text>
-        <line class="w-spi" x1="525" y1="292" x2="726" y2="292"/>
-        <text class="d-sig" x="734" y="296" text-anchor="start">CSN · 10k↑</text>
-        <!-- control -->
-        <text class="d-pin" x="517" y="324" text-anchor="end">G4</text>
-        <line class="w-spi" x1="525" y1="320" x2="726" y2="320"/>
-        <text class="d-sig" x="734" y="324" text-anchor="start">GDO0 / CE · 4k7↓</text>
-        <!-- power -->
-        <text class="d-pin" x="517" y="356" text-anchor="end">3V3</text>
-        <line class="w-pwr" x1="525" y1="352" x2="726" y2="352"/>
-        <text class="d-sig" x="734" y="356" text-anchor="start" style="fill:var(--rf)">3V3 · GND</text>
-        <text class="d-band" x="625" y="196" text-anchor="middle">SPI2 (shared w/ SD)</text>
+      <svg viewBox="0 0 760 310" role="img" aria-label="Wiring diagram: the ESP32-C5 console pins connect to four M-Bus pads. C5 G11 TX crosses to M-Bus pin 13 G38 (the P4 RXD), C5 G12 RX crosses to M-Bus pin 14 G37 (the P4 TXD), 5V to pin 28, GND to pin 1.">
+        <rect class="board" x="40" y="70" width="150" height="180" rx="8"/>
+        <text class="d-title" x="115" y="96" text-anchor="middle">ESP32-C5</text>
+        <text class="d-sub" x="115" y="112" text-anchor="middle">console UART0</text>
+        <circle class="term" cx="190" cy="140" r="5" style="stroke:#e8590c"/>
+        <text class="pad-t" x="178" y="136" text-anchor="end">5V</text>
+        <circle class="term" cx="190" cy="172" r="5" style="stroke:#868e96"/>
+        <text class="pad-t" x="178" y="168" text-anchor="end">GND</text>
+        <circle class="term" cx="190" cy="204" r="5" style="stroke:#37b24d"/>
+        <text class="pad-t" x="178" y="200" text-anchor="end">G11<tspan class="d-xs" dx="2">TX</tspan></text>
+        <circle class="term" cx="190" cy="236" r="5" style="stroke:#4a7bd6"/>
+        <text class="pad-t" x="178" y="232" text-anchor="end">G12<tspan class="d-xs" dx="2">RX</tspan></text>
+        <rect class="board" x="560" y="40" width="150" height="238" rx="8"/>
+        <text class="d-title" x="635" y="28" text-anchor="middle">Tab5 M-Bus (2×15)</text>
+        <circle class="term" cx="600" cy="236" r="5" style="stroke:#e8590c"/>
+        <text class="pad-t" x="612" y="232">5V · pin 28</text>
+        <circle class="term" cx="600" cy="70" r="5" style="stroke:#868e96"/>
+        <text class="pad-t" x="612" y="66">GND · pin 1</text>
+        <circle class="term" cx="600" cy="140" r="5" style="stroke:#4a7bd6"/>
+        <text class="pad-t" x="612" y="136">G37 · pin 14 <tspan class="d-xs">(P4 TXD)</tspan></text>
+        <circle class="term" cx="600" cy="172" r="5" style="stroke:#37b24d"/>
+        <text class="pad-t" x="612" y="168">G38 · pin 13 <tspan class="d-xs">(P4 RXD)</tspan></text>
+        <path class="lead" style="stroke:#e8590c" d="M195 140 C 360 140, 430 236, 595 236"/>
+        <path class="lead" style="stroke:#868e96" d="M195 172 C 330 172, 460 70, 595 70"/>
+        <path class="lead" style="stroke:#37b24d" d="M195 204 C 360 204, 440 172, 595 172"/>
+        <path class="lead" style="stroke:#4a7bd6" d="M195 236 C 380 236, 430 140, 595 140"/>
+        <text class="d-xs" x="400" y="258" text-anchor="middle">TX↔RX cross over · common GND · one link only</text>
       </svg>
-      <figcaption>Solid cyan = signal, dashed amber = power. On the store board the left harness is the M5Bus/Grove connector; on a dev board it is four jumpers. <span class="mono">G3</span> (CSN) wants a 10k pull-up and <span class="mono">G4</span> (control) a 4.7k pull-down so the shared bus boots sane. <span class="mono">G4</span> is the CC1101's GDO0 or the nRF24's CE, depending on which radio is fitted.</figcaption>
+      <figcaption>The whole interface to the tablet. <b>C5 TX (G11) → M-Bus G38</b> and <b>C5 RX (G12) → M-Bus G37</b> — the pair crosses. On the store board this is the M5Bus/Grove connector; on a dev board it is four jumpers. Pick <em>one</em> link (M-Bus, Grove, or USB) — they all land on UART0.</figcaption>
+      <div class="legend">
+        <span class="lg"><span class="wire" style="background:#e8590c"></span>5V</span>
+        <span class="lg"><span class="wire" style="background:#868e96"></span>GND</span>
+        <span class="lg"><span class="wire" style="background:#37b24d"></span>C5 TX → Tab5 RX</span>
+        <span class="lg"><span class="wire" style="background:#4a7bd6"></span>C5 RX ← Tab5 TX</span>
+      </div>
     </figure>
+
+    <h3>Harness B — the C5 to one radio (SPI2, shared with SD)</h3>
+    <figure>
+      <svg viewBox="0 0 820 430" role="img" aria-label="Wiring diagram: the ESP32-C5 SPI2 bus to one radio. G6 to SCK, G8 to MOSI, G5 to MISO, G3 to CSN, G4 to the control pin (CC1101 GDO0 or nRF24 CE), 3V3 to VCC, GND to GND. The CC1101 and nRF24 share this one header, one at a time.">
+        <rect class="board" x="56" y="44" width="150" height="346" rx="8"/>
+        <text class="d-title" x="131" y="72" text-anchor="middle">ESP32-C5</text>
+        <text class="d-sub" x="131" y="90" text-anchor="middle">SPI2 · shared w/ SD</text>
+        <rect class="board" x="614" y="44" width="150" height="346" rx="8"/>
+        <text class="d-title" x="689" y="72" text-anchor="middle">Radio header</text>
+        <text class="d-sub" x="689" y="90" text-anchor="middle">CC1101 / nRF24</text>
+        <!-- C5 right-edge terminals -->
+        <circle class="term" cx="206" cy="130" r="5.5" style="stroke:#22b8cf"/><text class="pad-t" x="194" y="126" text-anchor="end">G6</text>
+        <circle class="term" cx="206" cy="172" r="5.5" style="stroke:#37b24d"/><text class="pad-t" x="194" y="168" text-anchor="end">G8</text>
+        <circle class="term" cx="206" cy="214" r="5.5" style="stroke:#4a7bd6"/><text class="pad-t" x="194" y="210" text-anchor="end">G5</text>
+        <circle class="term" cx="206" cy="256" r="5.5" style="stroke:#e64980"/><text class="pad-t" x="194" y="252" text-anchor="end">G3</text>
+        <circle class="term" cx="206" cy="298" r="5.5" style="stroke:#9b5de5"/><text class="pad-t" x="194" y="294" text-anchor="end">G4</text>
+        <circle class="term" cx="206" cy="340" r="5.5" style="stroke:#f08c00"/><text class="pad-t" x="194" y="336" text-anchor="end">3V3</text>
+        <circle class="term" cx="206" cy="372" r="5.5" style="stroke:#868e96"/><text class="pad-t" x="194" y="368" text-anchor="end">GND</text>
+        <!-- radio left-edge terminals -->
+        <circle class="term" cx="614" cy="130" r="5.5" style="stroke:#22b8cf"/><text class="pad-t" x="626" y="126">SCK</text>
+        <circle class="term" cx="614" cy="172" r="5.5" style="stroke:#37b24d"/><text class="pad-t" x="626" y="168">MOSI / SI</text>
+        <circle class="term" cx="614" cy="214" r="5.5" style="stroke:#4a7bd6"/><text class="pad-t" x="626" y="210">MISO / SO</text>
+        <circle class="term" cx="614" cy="256" r="5.5" style="stroke:#e64980"/><text class="pad-t" x="626" y="252">CSN<tspan class="d-xs" dx="2">10k↑</tspan></text>
+        <circle class="term" cx="614" cy="298" r="5.5" style="stroke:#9b5de5"/><text class="pad-t" x="626" y="294">GDO0 / CE<tspan class="d-xs" dx="2">4k7↓</tspan></text>
+        <circle class="term" cx="614" cy="340" r="5.5" style="stroke:#f08c00"/><text class="pad-t" x="626" y="336">VCC 3V3</text>
+        <circle class="term" cx="614" cy="372" r="5.5" style="stroke:#868e96"/><text class="pad-t" x="626" y="368">GND</text>
+        <!-- leads -->
+        <path class="lead" style="stroke:#22b8cf" d="M211 130 C 360 130, 460 130, 609 130"/>
+        <path class="lead" style="stroke:#37b24d" d="M211 172 C 360 172, 460 172, 609 172"/>
+        <polygon points="609,172 598,167 598,177" fill="#37b24d"/>
+        <path class="lead" style="stroke:#4a7bd6" d="M211 214 C 360 214, 460 214, 609 214"/>
+        <polygon points="211,214 222,209 222,219" fill="#4a7bd6"/>
+        <path class="lead" style="stroke:#e64980" d="M211 256 C 360 256, 460 256, 609 256"/>
+        <path class="lead" style="stroke:#9b5de5" d="M211 298 C 360 298, 460 298, 609 298"/>
+        <path class="lead" style="stroke:#f08c00" d="M211 340 C 360 340, 460 340, 609 340"/>
+        <path class="lead" style="stroke:#868e96" d="M211 372 C 360 372, 460 372, 609 372"/>
+        <text class="d-xs" x="410" y="116" text-anchor="middle">one radio on the header at a time</text>
+        <text class="d-xs" x="410" y="404" text-anchor="middle">SD rides the same SCK / MOSI / MISO on its own CS (G10)</text>
+      </svg>
+      <figcaption>The radio bus, pin to pin. <span class="mono">G6/G8/G5</span> are the shared SPI2 (the SD card is on the same three wires, its own CS on <span class="mono">G10</span>). <span class="mono">G3</span> (CSN) wants a 10k pull-up and <span class="mono">G4</span> a 4.7k pull-down so the bus boots sane. <span class="mono">G4</span> is the CC1101's <b>GDO0</b> or the nRF24's <b>CE</b>, depending on which radio is fitted — one at a time. All logic and power is 3.3 V.</figcaption>
+      <div class="legend">
+        <span class="lg"><span class="wire" style="background:#22b8cf"></span>SCK</span>
+        <span class="lg"><span class="wire" style="background:#37b24d"></span>MOSI</span>
+        <span class="lg"><span class="wire" style="background:#4a7bd6"></span>MISO</span>
+        <span class="lg"><span class="wire" style="background:#e64980"></span>CSN (G3)</span>
+        <span class="lg"><span class="wire" style="background:#9b5de5"></span>ctrl (G4)</span>
+        <span class="lg"><span class="wire" style="background:#f08c00"></span>3V3</span>
+        <span class="lg"><span class="wire" style="background:#868e96"></span>GND</span>
+      </div>
+    </figure>
+
+    <div class="note info"><span class="ic">i</span><p><b>On a XIAO C5, or want both radios wired at once?</b> The XIAO doesn't break out these stock pins, and stock JanOS shares one chip-select between the two radios. The proto-build guides cover both paths: the <a href="MonsterC5_on_Proto_Modules.html">DevKitC build</a> (a select switch picks the live radio) and the <a href="MonsterC5_on_Proto_Modules_XIAO.html">XIAO build</a> (re-pinned JanOS gives each radio its own chip-select, so both stay wired — no switch).</p></div>
 
     <h3>Tab5 → ESP32-C5 (the UART link)</h3>
     <div class="tbl-wrap">
