@@ -204,7 +204,7 @@ figure.wide{width:min(1340px,calc(100vw - 28px));margin-left:50%;transform:trans
   </header>
 
   <div class="note info" style="margin-top:28px"><span class="ic">i</span><div>
-    <p><b>The short version.</b> On the XIAO the stock C5 radio pins aren't reachable (they're the battery pad and the underside JTAG pads), so this build runs a <b>re-pinned JanOS</b> anyway — and while we're re-pinning, we give the CC1101 and the nRF24 <b>separate</b> chip-select and control lines instead of the one pair stock firmware shared. Both radios hang on the same SPI2 bus (<span class="mono">SCK/MOSI/MISO</span>) permanently; each answers only to its own CS. No select switch, no swapping — you still run one radio app at a time, that's all. It takes two proto boards: the XIAO on one, the radios and their regulator on the other, joined by the bus pins they share when stacked.</p>
+    <p><b>The short version.</b> On the XIAO the stock C5 radio pins aren't reachable (they're the battery pad and the underside JTAG pads), so this build runs a <b>re-pinned JanOS</b> anyway — and while we're re-pinning, we give the CC1101 and the nRF24 <b>separate</b> chip-select and control lines instead of the one pair stock firmware shared. Both radios hang on the same SPI2 bus (<span class="mono">SCK/MOSI/MISO</span>) permanently; each answers only to its own CS. No select switch, no swapping — you still run one radio app at a time, that's all. It takes two proto boards: the XIAO on one, the radios and their 3V3 buck module on the other, joined by the bus pins they share when stacked.</p>
   </div></div>
 
   <!-- OVERVIEW -->
@@ -214,7 +214,7 @@ figure.wide{width:min(1340px,calc(100vw - 28px));margin-left:50%;transform:trans
     <div class="grid g3">
       <div class="card"><span class="price">reason 1</span><h4>The stock pins aren't on the XIAO</h4><p>Stock JanOS uses <span class="mono">SCK=G6, MISO=G5, CS=G3, GDO0/CE=G4</span>. On the XIAO <span class="mono">G6</span> is the battery-sense pad and <span class="mono">G5/G3/G4</span> are JTAG pads on the <em>underside</em>. So a re-pin to the XIAO's broken-out pads is mandatory — Wi-Fi works stock, but no radio will.</p></div>
       <div class="card"><span class="price">reason 2</span><h4>Dedicated CS = both radios live</h4><p>Since we're re-pinning anyway, give each radio its own CS + control. The CC1101 lands on <span class="mono">D4/D5</span>, the nRF24 on <span class="mono">D0/D1</span>. Now both sit on the shared bus permanently; the deselected one tri-states <span class="mono">MISO</span>. The DPDT switch the other guide needs is <b>gone</b>.</p></div>
-      <div class="card"><span class="price">unchanged</span><h4>The hard parts still bite</h4><p>The <b>E07</b> is a <em>+PA</em> part — <span class="mono">TX_EN/RX_EN</span> steer its RF switch (<a href="#power">Power &amp; PA</a>). The <b>E01</b> pulls <b>~490 mA</b> on TX — it needs its own <b>3V3 LDO</b> + bulk cap. And both Ebyte parts are <b>1.27 mm SMD</b>: they need adapter boards.</p></div>
+      <div class="card"><span class="price">unchanged</span><h4>The hard parts still bite</h4><p>The <b>E07</b> is a <em>+PA</em> part — <span class="mono">TX_EN/RX_EN</span> steer its RF switch (<a href="#power">Power &amp; PA</a>). The <b>E01</b> pulls <b>~490 mA</b> on TX — it needs its own <b>3V3 buck module</b> + bulk cap. And both Ebyte parts are <b>1.27 mm SMD</b>: they need adapter boards.</p></div>
     </div>
 
     <h3>Two pin domains — keep them straight</h3>
@@ -227,7 +227,7 @@ figure.wide{width:min(1340px,calc(100vw - 28px));margin-left:50%;transform:trans
   <!-- PARTS -->
   <section id="parts">
     <div class="sec-h"><span class="num">02</span><h2>Parts — what to buy</h2></div>
-    <p class="sec-sub">Two proto boards instead of one, no DPDT switch, and no flying leads to the tablet — the M-Bus stack does that. The parts that matter are the <b>second board</b> and a stiff <b>3V3 regulator</b>.</p>
+    <p class="sec-sub">Two proto boards instead of one, no DPDT switch, and no flying leads to the tablet — the M-Bus stack does that. The parts that matter are the <b>second board</b> and a stiff <b>3V3 buck module</b>.</p>
     <div class="tbl-wrap">
       <table>
         <caption>Bill of materials</caption>
@@ -236,7 +236,7 @@ figure.wide{width:min(1340px,calc(100vw - 28px));margin-left:50%;transform:trans
           <tr><td><b>Seeed XIAO ESP32-C5</b></td><td class="mono">1</td><td>The host. Must be the <b>C5</b> (2.4 <em>and</em> 5 GHz) — a XIAO C3/C6/S3 is 2.4 GHz-only and is not the MonsterC5 target.</td></tr>
           <tr><td><b>M5Stack Proto Module</b> (classic, or Proto 13.2)</td><td class="mono">1</td><td><b>Board A</b> plus the frame that seats on the Tab5's M-Bus. The 13.2 mm frame gives more headroom between boards.</td></tr>
           <tr><td><b>M5Stack Proto Board</b> (PROTO-2.54)</td><td class="mono">1</td><td><b>Board B.</b> Same 50 mm PCB with its own 2×15 header, so it stacks on Board A and shares every bus pin. One board alone is too tight for all four parts.</td></tr>
-          <tr><td><b>3V3 regulator, ≥ 600 mA</b> (LDO or fixed-3.3 V buck)</td><td class="mono">1</td><td>Feeds the radios from bus 5V so nothing else sees the E01's 490 mA TX burst. A <em>fixed</em> 3.3 V part can't be mis-set above the radios' 3.6 V limit.</td></tr>
+          <tr><td><b>DC-DC buck module, 3.3 V out, ≥ 600 mA</b></td><td class="mono">1</td><td>Feeds the radios from M-Bus 5V so neither the XIAO's regulator nor its <span class="mono">3V3</span> pad sees the ~490 mA TX burst. A switching buck wastes far less than an AMS1117 LDO would (~0.8 W dropping 5→3.3 V at that burst), so it runs cool. Confirm the module is set to <b>3.3 V</b> out and rated past the burst — a <em>fixed</em>-3.3 V module can't be mis-set above the radios' 3.6 V limit.</td></tr>
           <tr><td><b>470 µF + 0.1 µF</b></td><td class="mono">2 ea</td><td>C1, C2 — bulk and bypass across VCC–GND at each radio.</td></tr>
           <tr><td><b>10k ×2, 4.7k ×1</b></td><td class="mono">3</td><td>R1, R2 hold each chip-select high at boot; R3 holds the nRF24's CE low.</td></tr>
           <tr><td><b>30 AWG wire + Kapton tape</b></td><td class="mono">—</td><td>Fine wire for the 1.27 mm castellations; tape to insulate under both modules.</td></tr>
@@ -327,11 +327,11 @@ figure.wide{width:min(1340px,calc(100vw - 28px));margin-left:50%;transform:trans
     </figure>
 
     <h3>Harness B — both boards, every wire (to scale)</h3>
-    <p>One board is too tight for a XIAO, an 18×32 mm E07, an E01 and a regulator, so this build uses <b>two PROTO-2.54 boards on one M-Bus stack</b>: <b>Board A</b> (the board inside the Proto Module) carries the XIAO; <b>Board B</b> (an added Proto Board) carries both radios and their 3V3 regulator. Stacked boards <b>share all 30 bus pins</b>, so nothing flies between them — every wire is a short on-board run from a part's pad to an M-Bus tap pad, and plugging the boards together joins the two halves.</p>
+    <p>One board is too tight for a XIAO, an 18×32 mm E07, an E01 and a buck module, so this build uses <b>two PROTO-2.54 boards on one M-Bus stack</b>: <b>Board A</b> (the board inside the Proto Module) carries the XIAO; <b>Board B</b> (an added Proto Board) carries both radios and their 3V3 buck module. Stacked boards <b>share all 30 bus pins</b>, so nothing flies between them — every wire is a short on-board run from a part's pad to an M-Bus tap pad, and plugging the boards together joins the two halves.</p>
     <p>Drawn 1:1 on the real hole grid (2.54 mm, 260 holes) with each module's castellations at their true 1.27 mm positions and datasheet pad numbers. Both modules are shown <b>top view, shield up</b>, rotated so their pad edge faces the bus.</p>
     <figure class="wide">
       <div class="scrollx">
-        <svg viewBox="0 0 1332 635" role="img" aria-label="To-scale two-board wiring. Board A carries the XIAO ESP32-C5; Board B carries the E07-433M20S, the E01-2G4M27SX and a 3.3 volt regulator. Every wire runs from a part pad to an M-Bus tap pad; the two boards share those bus pins when stacked.">
+        <svg viewBox="0 0 1332 635" role="img" aria-label="To-scale two-board wiring. Board A carries the XIAO ESP32-C5; Board B carries the E07-433M20S, the E01-2G4M27SX and a 3.3 volt buck module. Every wire runs from a part pad to an M-Bus tap pad; the two boards share those bus pins when stacked.">
         <rect class="pcb" x="54.0" y="117.0" width="450.0" height="450.0" rx="19.8"/>
         <text class="d-t" x="279.0" y="52.2" text-anchor="middle">BOARD A — controller</text>
         <text class="d-s" x="279.0" y="79.2" text-anchor="middle">Proto Module board · XIAO ESP32-C5 · stacks on the Tab5 M-Bus</text>
@@ -721,7 +721,7 @@ figure.wide{width:min(1340px,calc(100vw - 28px));margin-left:50%;transform:trans
         <text class="d-xs" x="58.5" y="617.4" text-anchor="start">Odd pins (GND, “3”) are the outer column — run round the header end, or solder at the back pads.</text>
         <rect class="pcb" x="828.0" y="117.0" width="450.0" height="450.0" rx="19.8"/>
         <text class="d-t" x="1053.0" y="52.2" text-anchor="middle">BOARD B — radios</text>
-        <text class="d-s" x="1053.0" y="79.2" text-anchor="middle">added Proto Board · E07 + E01 + 3V3 regulator · same M-Bus pins</text>
+        <text class="d-s" x="1053.0" y="79.2" text-anchor="middle">added Proto Board · E07 + E01 + 3V3 buck module · same M-Bus pins</text>
         <circle class="mh" cx="855.0" cy="144.0" r="14.0"/>
         <circle class="mh" cx="1251.0" cy="144.0" r="14.0"/>
         <circle class="mh" cx="855.0" cy="540.0" r="14.0"/>
@@ -1112,7 +1112,7 @@ figure.wide{width:min(1340px,calc(100vw - 28px));margin-left:50%;transform:trans
         <text class="pad-x" x="996.3" y="486.9" text-anchor="end">10 GND</text>
         <rect class="reg" x="842.4" y="378.0" width="90.0" height="108.0" rx="4"/>
         <text class="d-t" x="875.7" y="414.0" text-anchor="middle">3V3</text>
-        <text class="d-xs" x="875.7" y="451.8" text-anchor="middle">reg.</text>
+        <text class="d-xs" x="875.7" y="451.8" text-anchor="middle">buck</text>
         <text class="d-xs" x="875.7" y="469.8" text-anchor="middle">≥600 mA</text>
         <circle class="term" cx="932.4" cy="396.0" r="6.5" style="stroke:#e8590c"/>
         <text class="pad-x" x="921.6" y="400.1" text-anchor="end">IN</text>
@@ -1258,8 +1258,8 @@ figure.wide{width:min(1340px,calc(100vw - 28px));margin-left:50%;transform:trans
         <caption>M-Bus pins used by this build</caption>
         <thead><tr><th>Bus pin</th><th>Silk</th><th>On the Tab5</th><th>Net here</th><th>Board A · XIAO pad</th><th>Board B · module pad</th></tr></thead>
         <tbody>
-          <tr class="pwr"><td class="mono">28</td><td class="mono">5V</td><td>EXT 5V (switchable)</td><td><span class="wsw" style="background:#e8590c"></span>5V</td><td class="mono">5V (VBUS)</td><td class="mono">regulator IN</td></tr>
-          <tr><td class="mono">1 (3, 5)</td><td class="mono">GND</td><td>GND</td><td><span class="wsw" style="background:#868e96"></span>GND</td><td class="mono">GND</td><td class="mono">E07 1, 12 · E01 8 · reg GND</td></tr>
+          <tr class="pwr"><td class="mono">28</td><td class="mono">5V</td><td>EXT 5V (switchable)</td><td><span class="wsw" style="background:#e8590c"></span>5V</td><td class="mono">5V (VBUS)</td><td class="mono">buck IN</td></tr>
+          <tr><td class="mono">1 (3, 5)</td><td class="mono">GND</td><td>GND</td><td><span class="wsw" style="background:#868e96"></span>GND</td><td class="mono">GND</td><td class="mono">E07 1, 12 · E01 8 · buck GND</td></tr>
           <tr class="tap"><td class="mono">13</td><td class="mono">3</td><td class="mono">G38 · RXD0</td><td><span class="wsw" style="background:#12b886"></span>XIAO TX → Tab5</td><td class="mono">D6 (G11)</td><td>—</td></tr>
           <tr class="tap"><td class="mono">14</td><td class="mono">1/T</td><td class="mono">G37 · TXD0</td><td><span class="wsw" style="background:#fab005"></span>Tab5 → XIAO RX</td><td class="mono">D7 (G12)</td><td>—</td></tr>
           <tr><td class="mono">2</td><td class="mono">35</td><td class="mono">G16 · idle</td><td><span class="wsw" style="background:#37b24d"></span>MOSI</td><td class="mono">D10 (G10)</td><td class="mono">E07 2 · E01 5</td></tr>
@@ -1274,15 +1274,15 @@ figure.wide{width:min(1340px,calc(100vw - 28px));margin-left:50%;transform:trans
     </div>
     <div class="note stop"><span class="ic">✕</span><div>
       <p><b>Shared pins reach the Tab5 too.</b> Seven of these nets ride on bus pins that are also ESP32-P4 GPIOs (<span class="mono">G16/G17/G45/G52/G6/G48/G51</span>). The MonsterC5 Tab5 app never configures them — it only uses <span class="mono">G37/G38</span> on the bus — so they float and the lines are yours. <b>Don't launch another Tab5 app that drives those pins while this stack is attached.</b></p>
-      <p><b>Never borrow:</b> pins <span class="mono">17/18</span> (the Tab5's live internal I²C, G31/G32), <span class="mono">24</span> (G35, boot strap), <span class="mono">25/27/29</span> (HVIN — the tablet's high-voltage DC input rail), <span class="mono">30</span> (BAT), <span class="mono">6</span> (EN). And don't tie the regulator's output to pin <span class="mono">12</span> — that's the Tab5's own 3V3 rail.</p>
+      <p><b>Never borrow:</b> pins <span class="mono">17/18</span> (the Tab5's live internal I²C, G31/G32), <span class="mono">24</span> (G35, boot strap), <span class="mono">25/27/29</span> (HVIN — the tablet's high-voltage DC input rail), <span class="mono">30</span> (BAT), <span class="mono">6</span> (EN). And don't tie the buck's output to pin <span class="mono">12</span> — that's the Tab5's own 3V3 rail.</p>
     </div></div>
     <div class="tbl-wrap">
       <table>
         <caption>Board B local nets — they never leave the radio board</caption>
         <thead><tr><th>Net / part</th><th>Connects</th><th>Why</th></tr></thead>
         <tbody>
-          <tr class="pwr"><td><span class="wsw" style="background:#f08c00"></span>3V3 rail</td><td class="mono">regulator OUT → E07 11 (VCC), E07 9 (RX_EN), E01 1 (VCC)</td><td>Radio supply. RX_EN high holds the E07's RF switch in receive.</td></tr>
-          <tr><td><span class="wsw" style="background:#868e96"></span>GND</td><td class="mono">E07 1, 12, 8 (TX_EN) · E01 8 · regulator GND</td><td>TX_EN low for receive. E07 14–16 and E01 9, 10 are ground too — bridge them to the nearest GND pad for a better RF return.</td></tr>
+          <tr class="pwr"><td><span class="wsw" style="background:#f08c00"></span>3V3 rail</td><td class="mono">buck OUT → E07 11 (VCC), E07 9 (RX_EN), E01 1 (VCC)</td><td>Radio supply. RX_EN high holds the E07's RF switch in receive.</td></tr>
+          <tr><td><span class="wsw" style="background:#868e96"></span>GND</td><td class="mono">E07 1, 12, 8 (TX_EN) · E01 8 · buck GND</td><td>TX_EN low for receive. E07 14–16 and E01 9, 10 are ground too — bridge them to the nearest GND pad for a better RF return.</td></tr>
           <tr><td>C1, C2</td><td class="mono">470 µF + 0.1 µF: E07 11↔12 · E01 1↔8</td><td>Bulk + bypass right at each module. E07's VCC and GND are adjacent pads.</td></tr>
           <tr><td>R1, R2</td><td class="mono">10k: E07 7 → 3V3 · E01 3 → 3V3</td><td>Hold both chip-selects high until the XIAO boots, so neither radio drives MISO.</td></tr>
           <tr><td>R3</td><td class="mono">4.7k: E01 2 (CE) → GND</td><td>Keeps the nRF24's PA off at reset.</td></tr>
@@ -1325,7 +1325,7 @@ figure.wide{width:min(1340px,calc(100vw - 28px));margin-left:50%;transform:trans
     <div class="sec-h"><span class="num">06</span><h2>Power &amp; the PA switch</h2></div>
     <p class="sec-sub">Both modules are <em>+PA</em> parts and both bite back if you skimp on the supply or feed them over 3.6 V. This is where builds that "almost work" fall down.</p>
     <div class="grid g2">
-      <div class="card"><h4>Give the radios their own 3V3</h4><p>The E01 draws <b>~490 mA</b> at 27 dBm in millisecond bursts (RX ~22 mA). The XIAO's regulator — and its <span class="mono">3V3</span> pad — won't hold 3V3 under that. Run an <b>LDO ≥ 600 mA from M-Bus 5V</b>, and put <b>470 µF + 0.1 µF</b> right at each radio's VCC/GND. Star the grounds at the LDO.</p></div>
+      <div class="card"><h4>Give the radios their own 3V3</h4><p>The E01 draws <b>~490 mA</b> at 27 dBm in millisecond bursts (RX ~22 mA). The XIAO's regulator — and its <span class="mono">3V3</span> pad — won't hold 3V3 under that. Run a <b>buck module (5V→3.3 V, ≥ 600 mA) from M-Bus 5V</b>, and put <b>470 µF + 0.1 µF</b> right at each radio's VCC/GND — they also swallow the buck's switching ripple. Star the grounds at the buck's − lead.</p></div>
       <div class="card"><h4>3.3 V is the ceiling</h4><p><b>Over 3.6 V permanently damages both modules.</b> They are not 5 V-tolerant on any pin — power <em>or</em> signal. The XIAO is a 3.3 V part, so its pads are fine; just never let the M-Bus 5V touch a module pin.</p></div>
     </div>
     <h3>Driving the E07's RF switch (TX_EN / RX_EN)</h3>
@@ -1365,11 +1365,11 @@ figure.wide{width:min(1340px,calc(100vw - 28px));margin-left:50%;transform:trans
           <tr><td>Neither radio detected, Wi-Fi fine</td><td>Running stock JanOS, not the dual-CS branch — the stock radio pins aren't on XIAO pads. Reflash the <a href="#firmware">re-pinned build</a>.</td></tr>
           <tr><td>One radio works, the other dead</td><td>That radio's dedicated CS/ctrl is mis-wired. CC1101: <span class="mono">D4 → bus 22 → E07 pad 7</span>, <span class="mono">D5 → bus 26 → E07 pad 6</span>. nRF24: <span class="mono">D0 → bus 10 → E01 pad 3</span>, <span class="mono">D1 → bus 16 → E01 pad 2</span>. Check you counted the pads from the right end.</td></tr>
           <tr><td>Radios fail only with the stack on the Tab5</td><td>Something on the tablet is driving a shared pin. Seven radio nets ride on bus pins that are also Tab5 GPIOs — confirm you're running the MonsterC5 app, and that no net landed on pins 17/18, 24 or 12.</td></tr>
-          <tr><td>Radios dead, XIAO fine</td><td>Board B has no supply: check bus pin 28 (5V) reaches the regulator, and that the two boards are fully seated so the shared pins actually connect.</td></tr>
+          <tr><td>Radios dead, XIAO fine</td><td>Board B has no supply: check bus pin 28 (5V) reaches the buck module, and that the two boards are fully seated so the shared pins actually connect.</td></tr>
           <tr><td>Garbage on MISO when idle</td><td>Deselected radio isn't releasing the bus — its CSN isn't high. Fit R1 and R2 — 10k from each CSN (E07 pad 7, E01 pad 3) to 3V3.</td></tr>
           <tr><td>E07 transmits weak / short range</td><td><span class="mono">TX_EN/RX_EN</span> floating. Tie <span class="mono">RX_EN→3V3, TX_EN→GND</span> for receive; drive them for TX.</td></tr>
-          <tr><td>Radio browns out / resets on TX</td><td>The 490 mA burst is sagging 3V3 — add the LDO + 470 µF at the module. Don't power the radio from the XIAO's regulator or its 3V3 pad.</td></tr>
-          <tr><td>Radio dead after first power-up</td><td><b>&gt;3.6 V killed it.</b> Confirm the LDO outputs 3.3 V and that no module pin ever saw 5V.</td></tr>
+          <tr><td>Radio browns out / resets on TX</td><td>The 490 mA burst is sagging 3V3 — add the buck + 470 µF at the module. Don't power the radio from the XIAO's regulator or its 3V3 pad.</td></tr>
+          <tr><td>Radio dead after first power-up</td><td><b>&gt;3.6 V killed it.</b> Confirm the buck outputs 3.3 V and that no module pin ever saw 5V.</td></tr>
           <tr><td>Captures aren't saving</td><td>There's no SD on the C5 — the MonsterC5 streams to the <span class="mono">Tab5's internal microSD</span>. Check the Tab5 has a card inserted and mounted; the C5 side needs no SD wiring.</td></tr>
         </tbody>
       </table>

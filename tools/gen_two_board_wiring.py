@@ -112,7 +112,7 @@ text(A, 0.5, 55.6, "Odd pins (GND, “3”) are the outer column — run round t
 
 # ------------------------------------------------------------------ Board B
 B = 50.0 + GAP
-board(B, "BOARD B — radios", "added Proto Board · E07 + E01 + 3V3 regulator · same M-Bus pins")
+board(B, "BOARD B — radios", "added Proto Board · E07 + E01 + 3V3 buck module · same M-Bus pins")
 PX = 33.0                                       # castellation edge (modules rotated 90° CW)
 e7y, e1y = 6.4, 27.4
 body(B, PX - 32.0, e7y, 32.0, 18.0)             # E07-433M20S 18x32 rotated
@@ -140,10 +140,10 @@ body(B, PX - 17.0, e1y + 1.0, 3.8, 3.8, "ipx"); text(B, PX - 15.1, e1y + 3.3, "I
 for gx, gy, lab in ((PX - 13.0, e1y, "9"), (PX - 13.0, e1y + 14.5, "10")):
     cx, cy = P(gx, gy, B); w(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{0.7*S:.1f}" fill="{C["gnd"]}"/>')
     text(B, gx + 1.3, gy + 1.9, "9 GND", "pad-x") if lab == "9" else text(B, gx - 1.3, gy - 0.8, "10 GND", "pad-x", "end")
-# 3V3 regulator (pads on its right edge)
+# 3V3 buck module (pads on its right edge)
 RX0, RXP = 1.6, 11.6
 body(B, RX0, 29.0, 10.0, 12.0, "reg")
-text(B, 5.3, 33.0, "3V3", "d-t", "middle"); text(B, 5.3, 37.2, "reg.", "d-xs", "middle"); text(B, 5.3, 39.2, "≥600 mA", "d-xs", "middle")
+text(B, 5.3, 33.0, "3V3", "d-t", "middle"); text(B, 5.3, 37.2, "buck", "d-xs", "middle"); text(B, 5.3, 39.2, "≥600 mA", "d-xs", "middle")
 for nm, yy, c in (("IN", 31.0, "v5"), ("GND", 35.0, "gnd"), ("OUT", 39.0, "v33")):
     pad(B, RXP, yy, c); text(B, RXP - 1.2, yy + 0.45, nm, "pad-x", "end")
 LN = dict(v33=34.2, gnd=35.0, mosi=35.8, miso=36.6, sck=37.4, ncs=38.2, nce=39.0, ccs=39.8, cgd=40.6)
@@ -203,7 +203,7 @@ w(f'<text class="d-xs" x="{gx:.1f}" y="{gy:.1f}" text-anchor="middle">same pin o
 
 W = (MX * 2 + 100 + GAP) * S; H = (MY + 50 + 7.6) * S
 svg = (f'<svg viewBox="0 0 {W:.0f} {H:.0f}" role="img" aria-label="To-scale two-board wiring. Board A carries the XIAO ESP32-C5; Board B carries the '
-       f'E07-433M20S, the E01-2G4M27SX and a 3.3 volt regulator. Every wire runs from a part pad to an M-Bus tap pad; the two boards share those bus pins when stacked.">\n'
+       f'E07-433M20S, the E01-2G4M27SX and a 3.3 volt buck module. Every wire runs from a part pad to an M-Bus tap pad; the two boards share those bus pins when stacked.">\n'
        + "\n".join(out) + "\n</svg>\n")
 import sys
 open(sys.argv[1] if len(sys.argv) > 1 else "two_board.svg", "w").write(svg)
